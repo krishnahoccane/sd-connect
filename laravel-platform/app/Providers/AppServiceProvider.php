@@ -14,6 +14,17 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        if (
+            !$this->app->runningUnitTests()
+            && !file_exists(storage_path('app/twsd_installed.lock'))
+            && filter_var(env('TWSD_INSTALLER_ENABLED', true), FILTER_VALIDATE_BOOLEAN)
+        ) {
+            config([
+                'session.driver' => 'file',
+                'cache.default' => 'file',
+            ]);
+        }
+
         Passport::tokensExpireIn(
             now()->addMinutes((int) config('twsd_connect.oauth.access_token_ttl_minutes', 15))
         );

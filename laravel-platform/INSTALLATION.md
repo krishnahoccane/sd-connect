@@ -31,7 +31,14 @@ php artisan passport:keys --force
 php artisan twsd:oidc:rotate-key --initial
 ```
 
-## 3. Initial Seeders (Super Admin, Providers, RBAC, Initial Organisation)
+## 3. Initial Setup Options: Web Installation Wizard (`/install`) or CLI Seeder
+### Option A — Interactive Web Installation Setup (`/install`)
+Before any Super Admin exists and while `storage/app/twsd_installed.lock` is absent (`TWSD_INSTALLER_ENABLED=true`), browse to `https://connect.twsd.me/install`:
+1. **Requirements Detection (`GET /install`, `GET /install/requirements`):** Verifies PHP 8.3+, required PHP extensions (`openssl`, `pdo_mysql`, `mbstring`, `xml`, `bcmath`, `intl`, `gmp`, `sodium`, `ctype`, `fileinfo`, `json`, `zip`), directory writability (`storage/*`, `bootstrap/cache`, `.env`), Argon2id, OpenSSL RSA-2048, and CSPRNG readiness.
+2. **Database & Environment Setup (`POST /install/database/test`, `POST /install/database/migrate`):** Tests live MySQL 8 PDO connectivity, safely writes `.env` (`EnvFileWriter` blocks newline/key injection), generates `APP_KEY`, runs migrations, generates Passport & OIDC signing keys, and seeds `AuthProviderSeeder` + `RolePermissionSeeder`.
+3. **Super Admin Creation (`POST /install/super-admin`):** Creates the central Argon2id Super Admin user (12+ char policy), assigns the `super_admin` platform role, optionally bootstraps the initial organisation, records `platform.installation_completed` in `audit_logs`, writes `storage/app/twsd_installed.lock`, sets `TWSD_INSTALLER_ENABLED=false`, and permanently locks all `/install/*` routes with HTTP `403`.
+
+### Option B — CLI Seeder (Headless / Docker)
 Configure `TWSD_SUPER_ADMIN_EMAIL`, `TWSD_SUPER_ADMIN_PASSWORD`, `TWSD_INITIAL_ORG_ADMIN_EMAIL`, and `TWSD_INITIAL_ORG_ADMIN_PASSWORD` in `.env`, then run:
 ```bash
 php artisan db:seed --class=Database\\Seeders\\DatabaseSeeder
@@ -49,9 +56,11 @@ Deploy `deploy/nginx-connect.twsd.me.conf` to `/etc/nginx/sites-available/connec
 php artisan test --testsuite=Feature,Security
 ```
 Covers:
+- `InstallationWizardTest`
 - `OidcAndPkceComplianceTest`
 - `PolicyResolutionAndTenantIsolationTest`
 - `ApplicationLifecycleAndOAuthClientTest`
 - `EmailPasswordAndOtpAuthenticationTest`
 - `EmailSenderIsolationAndAdminPolicyTest`
 - `CrossTenantAndAuditSecurityTest`
+

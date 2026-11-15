@@ -31,7 +31,13 @@
 - **Phase 5 — Authentication Administration & Blade + Bootstrap 5 UI:**
   - `GlobalAuthAdminController.php`, `AuthenticationAdminController.php`, `AuthenticationController.php`, `OAuthTokenController.php`
   - Blade + Bootstrap 5 views (`layouts/admin.blade.php`, `super-admin/auth-settings.blade.php`, `organisation-admin/applications.blade.php`, `organisation-admin/email-settings.blade.php`, updated `authentication/login.blade.php`)
+- **Web Installation Setup Wizard (`/install`):**
+  - `InstallationCheckService.php` (PHP 8.3+, extensions, writable paths, Argon2id/OpenSSL/CSPRNG detection)
+  - `EnvFileWriter.php` (strict env key validation & newline/null-byte injection protection)
+  - `InstallationExecutionService.php` (isolated MySQL PDO test, `.env` write, `APP_KEY` generation, migrations, Passport/OIDC keys, seeders, Argon2id Super Admin creation, `twsd_installed.lock`)
+  - `EnsureNotInstalled.php` (locks `/install/*` with HTTP `403` once installed) & `InstallationController.php` + `resources/views/installer/wizard.blade.php`
 - **Executable Laravel Feature & Security Test Suites (`tests/`):**
+  - `InstallationWizardTest.php`
   - `ApplicationLifecycleAndOAuthClientTest.php`
   - `EmailPasswordAndOtpAuthenticationTest.php`
   - `EmailSenderIsolationAndAdminPolicyTest.php`

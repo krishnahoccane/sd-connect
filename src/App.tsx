@@ -10,13 +10,15 @@ import {
   Server,
   Shield,
   Sun,
+  Wrench,
 } from 'lucide-react';
 import type { EnvironmentInfo } from './types';
 import { RepoExplorerView } from './components/RepoExplorerView';
 import { SchemaView } from './components/SchemaView';
 import { ProtocolLabView } from './components/ProtocolLabView';
+import { InstallerPreviewView } from './components/InstallerPreviewView';
 
-type NavSection = 'overview' | 'repository' | 'schema' | 'protocol';
+type NavSection = 'overview' | 'installer' | 'repository' | 'schema' | 'protocol';
 
 const PHASES = [
   { phase: 'Phase 1', title: 'Foundation, Laravel 12, Passport & OIDC Core', status: 'Source Complete + Audited (PHPUnit pending PHP host)' },
@@ -55,6 +57,7 @@ export default function App() {
 
   const navItems: Array<{ id: NavSection; label: string; icon: typeof LayoutGrid }> = [
     { id: 'overview', label: 'Overview & Status', icon: LayoutGrid },
+    { id: 'installer', label: 'Installation Setup', icon: Wrench },
     { id: 'repository', label: 'Laravel 12 Source', icon: FolderGit2 },
     { id: 'schema', label: 'MySQL 8 Schema', icon: Database },
     { id: 'protocol', label: 'Policy & PKCE Lab', icon: KeyRound },
@@ -62,6 +65,7 @@ export default function App() {
 
   const sectionTitle: Record<NavSection, string> = {
     overview: 'Platform Overview & Environment Audit',
+    installer: '3-Step Web Installation Setup (/install)',
     repository: 'Laravel 12 Repository Explorer',
     schema: 'MySQL 8 Multi-Tenant Schema',
     protocol: 'Policy Engine & PKCE S256 Lab',
@@ -235,11 +239,12 @@ export default function App() {
                   </div>
                   <div className="mt-3 divide-y divide-slate-100 text-xs dark:divide-slate-800">
                     {[
+                      { label: 'Web Installation Wizard (/install)', path: 'resources/views/installer/wizard.blade.php' },
                       { label: 'Phase 1–2 Security & Architecture Audit', path: 'AUDIT_PHASE_1_2.md' },
                       { label: 'OAuthClientService & ApplicationService (Phase 3)', path: 'app/Modules/OAuth/Services/OAuthClientService.php' },
                       { label: 'Email & OTP Providers + Sender Isolation (Phase 4)', path: 'app/Modules/OTP/Services/OtpVerificationService.php' },
                       { label: 'API Documentation & Security Specification', path: 'API_DOCUMENTATION.md' },
-                      { label: 'Laravel PHPUnit Feature & Security Suites', path: 'tests/Feature/EmailPasswordAndOtpAuthenticationTest.php' },
+                      { label: 'Laravel PHPUnit Feature & Security Suites', path: 'tests/Feature/InstallationWizardTest.php' },
                     ].map((artifact) => (
                       <button
                         key={artifact.path}
@@ -281,6 +286,7 @@ export default function App() {
             </div>
           )}
 
+          {section === 'installer' && <InstallerPreviewView env={env} onInspectFile={openRepoFile} />}
           {section === 'repository' && <RepoExplorerView key={repoTargetFile} initialPath={repoTargetFile} />}
           {section === 'schema' && <SchemaView />}
           {section === 'protocol' && <ProtocolLabView />}
