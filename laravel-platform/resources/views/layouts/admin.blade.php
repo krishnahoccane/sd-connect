@@ -18,7 +18,13 @@
         <div class="flex-grow-1 d-flex flex-column">
             <header class="bg-white border-bottom px-4 py-3 d-flex justify-content-between align-items-center">
                 <span class="fw-semibold small text-secondary">@yield('breadcrumb', 'Admin Console')</span>
-                <span class="small text-muted">{{ auth()->user()?->primary_email }}</span>
+                <div class="d-flex align-items-center gap-3">
+                    <span class="small text-muted">{{ auth()->user()?->primary_email }}</span>
+                    <form method="POST" action="{{ route('admin.logout') }}" class="m-0">
+                        @csrf
+                        <button type="submit" class="btn btn-outline-secondary btn-sm">Sign Out</button>
+                    </form>
+                </div>
             </header>
             <main class="container-fluid p-4">
                 @yield('content')

@@ -3,10 +3,12 @@
 namespace App\Http\Controllers\Installer;
 
 use App\Http\Controllers\Controller;
+use App\Models\User;
 use App\Modules\Installation\Services\InstallationCheckService;
 use App\Modules\Installation\Services\InstallationExecutionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\View\View;
 use Throwable;
 
@@ -122,6 +124,12 @@ class InstallationController extends Controller
                 orgSlug: $validated['organisation_slug'] ?? null,
                 request: $request
             );
+
+            $user = User::query()->where('uuid', $created['super_admin_uuid'])->first();
+            if ($user && $request->hasSession()) {
+                Auth::guard('web')->login($user);
+                $request->session()->regenerate();
+            }
 
             return response()->json([
                 'data' => $created,

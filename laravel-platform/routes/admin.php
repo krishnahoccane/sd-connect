@@ -1,5 +1,7 @@
 <?php
 
+use App\Http\Controllers\Admin\AdminAuthController;
+use App\Http\Controllers\Api\V1\SuperAdmin\GlobalAuthAdminController;
 use App\Http\Middleware\EnsureActiveUser;
 use App\Http\Middleware\EnsureSuperAdmin;
 use App\Http\Middleware\ResolveOrganisation;
@@ -12,6 +14,11 @@ use App\Models\SecurityEvent;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
+// Admin Console Session Authentication (satisfies Laravel's default route('login') redirect)
+Route::get('/admin/login', [AdminAuthController::class, 'showLogin'])->name('login');
+Route::post('/admin/login', [AdminAuthController::class, 'login'])->middleware('throttle:15,1')->name('admin.login.submit');
+Route::post('/admin/logout', [AdminAuthController::class, 'logout'])->middleware('auth')->name('admin.logout');
+
 Route::prefix('super-admin')->middleware(['auth', EnsureActiveUser::class, EnsureSuperAdmin::class])->group(function (): void {
     Route::get('/auth-settings', function () {
         return view('super-admin.auth-settings', [
@@ -20,6 +27,14 @@ Route::prefix('super-admin')->middleware(['auth', EnsureActiveUser::class, Ensur
             'securityEvents' => SecurityEvent::query()->orderByDesc('occurred_at')->limit(20)->get(),
         ]);
     })->name('super-admin.auth-settings');
+
+    // Web session + CSRF-authenticated actions for the Super Admin Blade UI
+    Route::put('/providers/email/platform-default', [GlobalAuthAdminController::class, 'updatePlatformEmail'])
+        ->name('super-admin.providers.email.update');
+    Route::post('/providers/email/platform-default/test', [GlobalAuthAdminController::class, 'testPlatformEmail'])
+        ->name('super-admin.providers.email.test');
+    Route::put('/providers/{providerCode}', [GlobalAuthAdminController::class, 'toggleGlobalProvider'])
+        ->name('super-admin.providers.toggle');
 });
 
 Route::prefix('org/{organisation}')

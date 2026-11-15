@@ -34,7 +34,11 @@
             </div>
 
             <div class="d-flex flex-wrap gap-2">
-                <a href="/super-admin/auth-settings" class="btn btn-dark btn-sm">Super Admin Console</a>
+                @auth
+                    <a href="/super-admin/auth-settings" class="btn btn-dark btn-sm">Super Admin Console</a>
+                @else
+                    <a href="{{ route('login') }}" class="btn btn-dark btn-sm">Admin Console Sign In</a>
+                @endauth
             </div>
         </div>
     </div>

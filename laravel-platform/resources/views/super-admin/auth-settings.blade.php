@@ -101,10 +101,16 @@
 
 @push('scripts')
 <script>
+const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+
 async function toggleGlobalProvider(code, nextState) {
-    const res = await fetch(`/api/v1/super-admin/providers/${encodeURIComponent(code)}`, {
+    const res = await fetch(`/super-admin/providers/${encodeURIComponent(code)}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'X-CSRF-TOKEN': csrfToken
+        },
         body: JSON.stringify({ is_globally_enabled: nextState })
     });
     if (res.ok) window.location.reload();
@@ -113,9 +119,13 @@ async function toggleGlobalProvider(code, nextState) {
 async function savePlatformEmail(e) {
     e.preventDefault();
     const form = new FormData(e.target);
-    const res = await fetch('/api/v1/super-admin/providers/email/platform-default', {
+    const res = await fetch('/super-admin/providers/email/platform-default', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'X-CSRF-TOKEN': csrfToken
+        },
         body: JSON.stringify({
             driver: 'platform_google_workspace',
             sender_name: form.get('sender_name'),
