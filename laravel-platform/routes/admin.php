@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Admin\AccountController;
 use App\Http\Controllers\Admin\AdminAuthController;
 use App\Http\Controllers\Api\V1\Organisation\ApplicationController;
 use App\Http\Controllers\Api\V1\Organisation\AuthenticationAdminController;
@@ -26,6 +27,13 @@ Route::post('/admin/login/otp/send', [AdminAuthController::class, 'sendEmailOtp'
 Route::post('/admin/login/otp/verify', [AdminAuthController::class, 'verifyEmailOtp'])->middleware('throttle:15,1')->name('admin.login.otp.verify');
 Route::post('/admin/logout', [AdminAuthController::class, 'logout'])->middleware('auth')->name('admin.logout');
 
+Route::middleware(['auth', EnsureActiveUser::class])->group(function (): void {
+    Route::get('/admin/profile', [AccountController::class, 'showProfile'])->name('admin.profile');
+    Route::put('/admin/profile', [AccountController::class, 'updateProfile'])->name('admin.profile.update');
+    Route::get('/admin/password', [AccountController::class, 'showPassword'])->name('admin.password');
+    Route::put('/admin/password', [AccountController::class, 'updatePassword'])->name('admin.password.update');
+});
+
 Route::prefix('super-admin')->middleware(['auth', EnsureActiveUser::class, EnsureSuperAdmin::class])->group(function (): void {
     Route::get('/auth-settings', function () {
         return view('super-admin.auth-settings', [
@@ -48,6 +56,8 @@ Route::prefix('super-admin')->middleware(['auth', EnsureActiveUser::class, Ensur
         ->name('super-admin.providers.email.update');
     Route::post('/providers/email/platform-default/test', [GlobalAuthAdminController::class, 'testPlatformEmail'])
         ->name('super-admin.providers.email.test');
+    Route::post('/providers/firebase_sms/test', [GlobalAuthAdminController::class, 'testFirebaseSms'])
+        ->name('super-admin.providers.firebase-sms.test');
     Route::put('/providers/{providerCode}/config', [GlobalAuthAdminController::class, 'upsertProviderConfiguration'])
         ->name('super-admin.providers.config');
     Route::put('/providers/{providerCode}', [GlobalAuthAdminController::class, 'toggleGlobalProvider'])

@@ -16,6 +16,7 @@ use App\Modules\Audit\Services\AuditService;
 use App\Modules\Providers\Email\Services\EmailConfigurationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Throwable;
@@ -217,6 +218,99 @@ class GlobalAuthAdminController extends Controller
             return response()->json([
                 'error' => 'email_delivery_failed',
                 'message' => 'Email delivery failed: ' . trim($e->getMessage()),
+            ], 422);
+        }
+    }
+
+    public function testFirebaseSms(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'firebase_id_token' => ['required', 'string'],
+        ]);
+
+        $config = ProviderConfiguration::query()
+            ->where('scope', 'global')
+            ->whereNull('organisation_id')
+            ->where('provider_code', 'firebase_sms')
+            ->first();
+
+        $publicSettings = $config?->public_settings ?? [];
+        $apiKey = $publicSettings['api_key'] ?? ($publicSettings['firebase_config']['apiKey'] ?? null);
+
+        if (!$config || empty($apiKey)) {
+            return response()->json([
+                'error' => 'firebase_config_missing',
+                'message' => 'Configure and save your Firebase SDK Config first before testing SMS OTP.',
+            ], 422);
+        }
+
+        try {
+            $response = Http::timeout(10)->post(
+                'https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=' . urlencode((string) $apiKey),
+                ['idToken' => $validated['firebase_id_token']]
+            );
+
+            if (!$response->successful()) {
+                $errorMsg = $response->json('error.message') ?? ('HTTP ' . $response->status());
+                $config->update([
+                    'health_status' => 'degraded',
+                    'last_error_message' => $errorMsg,
+                ]);
+
+                return response()->json([
+                    'error' => 'firebase_verification_failed',
+                    'message' => "Firebase verification rejected: {$errorMsg}",
+                ], 422);
+            }
+
+            $fbUser = $response->json('users.0') ?? [];
+            $phoneNumber = (string) ($fbUser['phoneNumber'] ?? '');
+
+            if ($phoneNumber === '') {
+                return response()->json([
+                    'error' => 'phone_missing',
+                    'message' => 'Firebase ID token does not contain a verified phone number.',
+                ], 422);
+            }
+
+            $maskedPhone = strlen($phoneNumber) > 6
+                ? substr($phoneNumber, 0, 4) . str_repeat('*', strlen($phoneNumber) - 6) . substr($phoneNumber, -2)
+                : '***';
+
+            $config->update([
+                'health_status' => 'healthy',
+                'last_verified_at' => now(),
+                'last_error_message' => null,
+            ]);
+
+            AuthProvider::query()->where('code', 'firebase_sms')->update([
+                'health_status' => 'healthy',
+                'last_health_check_at' => now(),
+            ]);
+
+            $this->auditService->record(
+                action: 'super_admin.firebase_sms_tested',
+                actor: $request->user(),
+                targetType: 'provider_configuration',
+                targetUuid: $config->uuid,
+                afterState: ['phone_masked' => $maskedPhone, 'project_id' => $publicSettings['project_id'] ?? null],
+                request: $request,
+                actorRole: 'super_admin'
+            );
+
+            return response()->json([
+                'data' => [
+                    'tested' => true,
+                    'phone_masked' => $maskedPhone,
+                    'verified_at' => now()->toIso8601String(),
+                ],
+            ]);
+        } catch (Throwable $e) {
+            Log::warning('Firebase SMS verification test failed', ['error' => $e->getMessage()]);
+
+            return response()->json([
+                'error' => 'firebase_test_failed',
+                'message' => 'Firebase SMS verification failed: ' . trim($e->getMessage()),
             ], 422);
         }
     }

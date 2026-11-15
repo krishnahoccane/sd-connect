@@ -89,6 +89,13 @@
                                                 onclick="openProviderModal('{{ $provider->code }}', '{{ e($provider->name) }}')">
                                                 {{ $hasConfig ? 'Edit Credentials' : 'Configure' }}
                                             </button>
+                                            @if($provider->code === 'firebase_sms' && ($hasConfig || $provider->is_globally_enabled))
+                                                <button type="button"
+                                                    class="btn btn-sm btn-outline-primary"
+                                                    onclick="openFirebaseSmsTestModal()">
+                                                    Test SMS
+                                                </button>
+                                            @endif
                                         @elseif($provider->code === 'email_otp')
                                             <a href="#platform-email-section" class="btn btn-sm btn-outline-secondary">Email Form &rarr;</a>
                                         @endif
@@ -298,6 +305,45 @@
                 <button type="submit" class="btn btn-dark btn-sm">Create Organisation</button>
             </div>
         </form>
+    </div>
+</div>
+
+<!-- Test Firebase SMS OTP Modal -->
+<div class="modal fade" id="testFirebaseSmsModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title h6">Test Firebase SMS OTP Delivery</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-light border small py-2 mb-3">
+                    Uses your saved Firebase Web Config (<code>Phone Auth</code> + <code>reCAPTCHA</code>). Make sure <strong>Phone</strong> sign-in is enabled in Firebase Console and <code>{{ request()->getHost() }}</code> is in <strong>Authorized domains</strong>.
+                </div>
+                <div id="fbTestFeedback" class="alert small py-2 mb-3 d-none"></div>
+
+                <form id="fbSendSmsForm" onsubmit="sendFirebaseTestSms(event)">
+                    <div class="mb-3">
+                        <label class="form-label small fw-medium">Phone Number (E.164 Format)</label>
+                        <input type="tel" id="fbTestPhone" class="form-control form-control-sm font-monospace" placeholder="+919876543210" required>
+                        <div class="form-text">Include country code (or use a Firebase Console test phone number).</div>
+                    </div>
+                    <div id="firebaseRecaptchaContainer" class="mb-3"></div>
+                    <button type="submit" id="fbSendSmsBtn" class="btn btn-dark btn-sm w-100">Send Test SMS OTP</button>
+                </form>
+
+                <form id="fbVerifySmsForm" class="d-none" onsubmit="verifyFirebaseTestSms(event)">
+                    <div class="mb-3">
+                        <label class="form-label small fw-medium">Enter 6-Digit SMS Code</label>
+                        <input type="text" id="fbTestCode" class="form-control form-control-sm font-monospace text-center" inputmode="numeric" maxlength="6" placeholder="123456" required>
+                    </div>
+                    <div class="d-flex gap-2">
+                        <button type="submit" id="fbVerifySmsBtn" class="btn btn-dark btn-sm flex-grow-1">Verify Code &amp; Mark Healthy</button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="resetFirebaseSmsTest()">Reset</button>
+                    </div>
+                </form>
+            </div>
+        </div>
     </div>
 </div>
 @endsection
@@ -644,6 +690,170 @@ async function createOrganisation(e) {
         return;
     }
     showFeedback(await parseError(res), true);
+}
+
+let fbScriptsLoaded = false;
+let fbRecaptchaVerifier = null;
+let fbConfirmationResult = null;
+
+function showFbTestFeedback(message, isError = false) {
+    const el = document.getElementById('fbTestFeedback');
+    el.className = `alert small py-2 mb-3 ${isError ? 'alert-danger' : 'alert-success'}`;
+    el.textContent = message;
+    el.classList.remove('d-none');
+}
+
+function loadScriptOnce(src) {
+    return new Promise((resolve, reject) => {
+        if (document.querySelector(`script[src="${src}"]`)) {
+            resolve();
+            return;
+        }
+        const s = document.createElement('script');
+        s.src = src;
+        s.async = true;
+        s.onload = resolve;
+        s.onerror = () => reject(new Error(`Failed to load ${src}`));
+        document.head.appendChild(s);
+    });
+}
+
+function resetFirebaseSmsTest() {
+    fbConfirmationResult = null;
+    document.getElementById('fbTestCode').value = '';
+    document.getElementById('fbVerifySmsForm').classList.add('d-none');
+    document.getElementById('fbSendSmsForm').classList.remove('d-none');
+    document.getElementById('fbTestFeedback').classList.add('d-none');
+    if (fbRecaptchaVerifier) {
+        try { fbRecaptchaVerifier.clear(); } catch {}
+        fbRecaptchaVerifier = null;
+    }
+    const container = document.getElementById('firebaseRecaptchaContainer');
+    if (container) container.innerHTML = '';
+    initFirebaseRecaptcha();
+}
+
+function getSavedFirebaseConfig() {
+    const current = existingProviderSettings.firebase_sms || {};
+    if (current.firebase_config && typeof current.firebase_config === 'object') {
+        return current.firebase_config;
+    }
+    if (current.api_key && current.project_id) {
+        return {
+            apiKey: current.api_key,
+            projectId: current.project_id,
+            authDomain: current.auth_domain || `${current.project_id}.firebaseapp.com`
+        };
+    }
+    return null;
+}
+
+async function ensureFirebaseSdkInitialized() {
+    const cfg = getSavedFirebaseConfig();
+    if (!cfg || !cfg.apiKey) {
+        throw new Error('Firebase SDK Config is not saved yet. Click Configure first and paste your firebaseConfig.');
+    }
+
+    if (!fbScriptsLoaded) {
+        await loadScriptOnce('https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js');
+        await loadScriptOnce('https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js');
+        fbScriptsLoaded = true;
+    }
+
+    if (firebase.apps.length > 0) {
+        return firebase.app();
+    }
+    return firebase.initializeApp(cfg);
+}
+
+async function initFirebaseRecaptcha() {
+    try {
+        const app = await ensureFirebaseSdkInitialized();
+        const container = document.getElementById('firebaseRecaptchaContainer');
+        container.innerHTML = '<div id="firebaseRecaptchaBox"></div>';
+        fbRecaptchaVerifier = new firebase.auth.RecaptchaVerifier('firebaseRecaptchaBox', { size: 'normal' }, app);
+        await fbRecaptchaVerifier.render();
+        document.getElementById('fbSendSmsBtn').disabled = false;
+    } catch (err) {
+        document.getElementById('fbSendSmsBtn').disabled = true;
+        showFbTestFeedback(err?.message || 'Unable to initialize Firebase SDK.', true);
+    }
+}
+
+function openFirebaseSmsTestModal() {
+    fbConfirmationResult = null;
+    document.getElementById('fbTestCode').value = '';
+    document.getElementById('fbVerifySmsForm').classList.add('d-none');
+    document.getElementById('fbSendSmsForm').classList.remove('d-none');
+    document.getElementById('fbTestFeedback').classList.add('d-none');
+    if (fbRecaptchaVerifier) {
+        try { fbRecaptchaVerifier.clear(); } catch {}
+        fbRecaptchaVerifier = null;
+    }
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('testFirebaseSmsModal')).show();
+    initFirebaseRecaptcha();
+}
+
+async function sendFirebaseTestSms(e) {
+    e.preventDefault();
+    const btn = document.getElementById('fbSendSmsBtn');
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Sending SMS...';
+    document.getElementById('fbTestFeedback').classList.add('d-none');
+
+    try {
+        const app = await ensureFirebaseSdkInitialized();
+        const phone = document.getElementById('fbTestPhone').value.trim();
+        fbConfirmationResult = await app.auth().signInWithPhoneNumber(phone, fbRecaptchaVerifier);
+        document.getElementById('fbSendSmsForm').classList.add('d-none');
+        document.getElementById('fbVerifySmsForm').classList.remove('d-none');
+        document.getElementById('fbTestCode').focus();
+        showFbTestFeedback(`SMS OTP dispatched to ${phone}. Enter the code below to complete verification.`, false);
+    } catch (err) {
+        showFbTestFeedback(err?.message || 'Failed to send Firebase SMS OTP.', true);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = orig;
+    }
+}
+
+async function verifyFirebaseTestSms(e) {
+    e.preventDefault();
+    const btn = document.getElementById('fbVerifySmsBtn');
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Verifying...';
+
+    try {
+        if (!fbConfirmationResult) {
+            throw new Error('Request a test SMS OTP first.');
+        }
+        const code = document.getElementById('fbTestCode').value.trim();
+        const cred = await fbConfirmationResult.confirm(code);
+        const idToken = await cred.user.getIdToken();
+
+        const res = await fetch('/super-admin/providers/firebase_sms/test', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'X-CSRF-TOKEN': csrfToken
+            },
+            body: JSON.stringify({ firebase_id_token: idToken })
+        });
+        if (!res.ok) {
+            throw new Error(await parseError(res));
+        }
+        try { await ensureFirebaseSdkInitialized().then((app) => app.auth().signOut()); } catch {}
+        showFbTestFeedback('Firebase SMS OTP verified end-to-end! Provider marked Healthy.', false);
+        setTimeout(() => window.location.reload(), 900);
+    } catch (err) {
+        showFbTestFeedback(err?.message || 'Verification failed.', true);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = orig;
+    }
 }
 </script>
 @endpush
