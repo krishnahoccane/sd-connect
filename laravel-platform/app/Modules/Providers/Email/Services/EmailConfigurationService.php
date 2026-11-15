@@ -23,16 +23,23 @@ class EmailConfigurationService
     public function upsertPlatformDefault(array $data, ?User $actor = null, ?Request $request = null): EmailConfiguration
     {
         return DB::transaction(function () use ($data, $actor, $request): EmailConfiguration {
+            $existing = EmailConfiguration::query()
+                ->where('scope', 'global')
+                ->whereNull('organisation_id')
+                ->first();
+
+            $secrets = $data['secrets'] ?? ($existing?->encrypted_transport_secrets);
+
             $config = EmailConfiguration::query()->updateOrCreate(
                 ['scope' => 'global', 'organisation_id' => null],
                 [
                     'driver' => $data['driver'] ?? 'platform_google_workspace',
                     'sender_name' => $data['sender_name'],
                     'sender_email' => strtolower(trim($data['sender_email'])),
-                    'encrypted_transport_secrets' => $data['secrets'] ?? null,
-                    'smtp_settings' => $data['smtp_settings'] ?? null,
-                    'otp_subject_template' => $data['otp_subject_template'] ?? '{{otp}} is your sign-in code for {{application_name}}',
-                    'otp_body_template' => $data['otp_body_template'] ?? 'Your one-time verification code for {{application_name}} is {{otp}}. It expires in {{expiry_minutes}} minutes.',
+                    'encrypted_transport_secrets' => $secrets,
+                    'smtp_settings' => $data['smtp_settings'] ?? $existing?->smtp_settings,
+                    'otp_subject_template' => $data['otp_subject_template'] ?? $existing?->otp_subject_template ?? '{{otp}} is your sign-in code for {{application_name}}',
+                    'otp_body_template' => $data['otp_body_template'] ?? $existing?->otp_body_template ?? 'Your one-time verification code for {{application_name}} is {{otp}}. It expires in {{expiry_minutes}} minutes.',
                     'is_verified' => (bool) ($data['is_verified'] ?? false),
                 ]
             );
@@ -200,15 +207,15 @@ class EmailConfigurationService
                 ],
             ]);
         } else {
-            // Google Workspace SMTP Relay / OAuth2 XOAUTH2 transport configuration
+            // Google Workspace / Custom Platform SMTP Relay configuration
             config([
                 "mail.mailers.{$mailerName}" => [
                     'transport' => 'smtp',
                     'host' => $smtp['host'] ?? 'smtp.gmail.com',
                     'port' => (int) ($smtp['port'] ?? 587),
-                    'encryption' => 'tls',
-                    'username' => $config->sender_email,
-                    'password' => $secrets['app_password'] ?? ($secrets['access_token'] ?? ''),
+                    'encryption' => $smtp['encryption'] ?? 'tls',
+                    'username' => !empty($smtp['username']) ? $smtp['username'] : $config->sender_email,
+                    'password' => $secrets['app_password'] ?? ($secrets['password'] ?? ($secrets['access_token'] ?? '')),
                     'timeout' => 10,
                 ],
             ]);
