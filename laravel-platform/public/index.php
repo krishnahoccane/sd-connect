@@ -21,6 +21,12 @@ foreach ($requiredDirs as $dir) {
     }
 }
 
+$envPath = __DIR__ . '/../.env';
+$envExamplePath = __DIR__ . '/../.env.example';
+if (!file_exists($envPath) && file_exists($envExamplePath) && is_writable(__DIR__ . '/..')) {
+    @copy($envExamplePath, $envPath);
+}
+
 $autoloadPath = __DIR__ . '/../vendor/autoload.php';
 if (!file_exists($autoloadPath)) {
     http_response_code(503);

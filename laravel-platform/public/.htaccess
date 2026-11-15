@@ -1,8 +1,6 @@
-<IfModule mod_rewrite.c>
-    <IfModule mod_negotiation.c>
-        Options -MultiViews -Indexes
-    </IfModule>
+DirectoryIndex index.php
 
+<IfModule mod_rewrite.c>
     RewriteEngine On
 
     # Handle Authorization Header for OAuth 2.0 Bearer Tokens
@@ -11,7 +9,7 @@
 
     # Handle X-XSRF-Token Header
     RewriteCond %{HTTP:X-XSRF-Token} .
-    RewriteRule .* - [E=HTTP_X_XSRF_TOKEN:%{HTTP:X-XSRF-Token}]
+    RewriteRule .* - [E=HTTP_XSRF_TOKEN:%{HTTP:X-XSRF-Token}]
 
     # Redirect Trailing Slashes If Not A Folder
     RewriteCond %{REQUEST_FILENAME} !-d
