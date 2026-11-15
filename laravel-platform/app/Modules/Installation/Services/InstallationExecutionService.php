@@ -47,6 +47,14 @@ class InstallationExecutionService
             return true;
         }
 
+        // Avoid blocking DNS/TCP timeouts on unconfigured DB hosts (e.g. DB_HOST=mysql before Step 2 runs)
+        $dbConfigured = app()->runningUnitTests()
+            || filter_var(env('TWSD_DB_CONFIGURED', false), FILTER_VALIDATE_BOOLEAN);
+
+        if (!$dbConfigured) {
+            return false;
+        }
+
         try {
             if (!empty(config('app.key')) && Schema::hasTable('users')) {
                 return User::query()->where('is_super_admin', true)->exists();
@@ -117,6 +125,10 @@ class InstallationExecutionService
             $appKey = 'base64:' . base64_encode(Encrypter::generateKey('AES-256-CBC'));
         }
 
+        $redisHost = (string) ($dbConfig['redis_host'] ?? '127.0.0.1');
+        $redisPort = (int) ($dbConfig['redis_port'] ?? 6379);
+        $redisAvailable = $this->isRedisReachable($redisHost, $redisPort);
+
         $this->envWriter->updateValues(base_path('.env'), [
             'APP_URL' => (string) ($dbConfig['app_url'] ?? 'https://connect.twsd.me'),
             'APP_KEY' => $appKey,
@@ -126,9 +138,13 @@ class InstallationExecutionService
             'DB_DATABASE' => (string) $dbConfig['db_database'],
             'DB_USERNAME' => (string) $dbConfig['db_username'],
             'DB_PASSWORD' => (string) ($dbConfig['db_password'] ?? ''),
-            'REDIS_HOST' => (string) ($dbConfig['redis_host'] ?? '127.0.0.1'),
-            'REDIS_PORT' => (int) ($dbConfig['redis_port'] ?? 6379),
+            'TWSD_DB_CONFIGURED' => true,
+            'REDIS_HOST' => $redisHost,
+            'REDIS_PORT' => $redisPort,
             'REDIS_PASSWORD' => (string) ($dbConfig['redis_password'] ?? ''),
+            'CACHE_STORE' => $redisAvailable ? 'redis' : 'file',
+            'SESSION_DRIVER' => $redisAvailable ? 'redis' : 'file',
+            'QUEUE_CONNECTION' => $redisAvailable ? 'redis' : 'sync',
         ]);
 
         // Refresh runtime configuration & database connection
@@ -158,7 +174,23 @@ class InstallationExecutionService
         return [
             'migrated' => true,
             'mysql_version' => $test['server_version'],
+            'redis_active' => $redisAvailable,
         ];
+    }
+
+    private function isRedisReachable(string $host, int $port): bool
+    {
+        if ($host === '') {
+            return false;
+        }
+
+        $socket = @fsockopen($host, $port, $errno, $errstr, 1.0);
+        if ($socket === false) {
+            return false;
+        }
+
+        fclose($socket);
+        return true;
     }
 
     /**
