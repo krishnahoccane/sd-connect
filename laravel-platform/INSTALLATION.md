@@ -8,13 +8,19 @@
 - Nginx + Let's Encrypt SSL + Supervisor
 
 ## 1. Laravel Project Bootstrap
-Copy `/laravel-platform/` to `/var/www/connect.twsd.me` (or overlay onto a fresh Laravel 12 skeleton ensuring `bootstrap/app.php` loads `routes/web.php`, `routes/api.php`, and registers `App\Providers\AppServiceProvider`), then run:
+Copy `/laravel-platform/` to `/var/www/connect.twsd.me` (or your cPanel domain folder), then run:
 ```bash
 cd /var/www/connect.twsd.me
 composer install --no-dev --optimize-autoloader
 cp .env.example .env
 php artisan key:generate
 ```
+
+### cPanel Shared Hosting Notes
+1. **Point Document Root to `public/` (Fixes `Index of /`):** In cPanel → **Domains**, set the document root of `connect.twsd.me` to `/home/<user>/connect.twsd.me/public`. A root `.htaccess` is also included to block directory listings and sensitive files (`.env`, `composer.json`, `storage/`, `vendor/`) and internally route requests to `public/` if DocumentRoot points to the project root.
+2. **Select PHP 8.3+ in MultiPHP Manager:** Ensure `connect.twsd.me` uses PHP 8.3+ with `pdo_mysql`, `openssl`, `mbstring`, `xml`, `bcmath`, `intl`, `gmp`, `sodium`, and `zip` enabled.
+3. **Install Composer Dependencies (Fixes `500 Internal Server Error`):** `vendor/` is not committed in source. Run `composer install --no-dev --optimize-autoloader` via cPanel **Terminal** / SSH.
+4. **Permissions:** Ensure `storage/` and `bootstrap/cache/` are `0775` (or `0755` under suPHP/FastCGI). Check `storage/logs/laravel.log` if an HTTP 500 occurs.
 
 ## 2. Database, Passport & OIDC Key Initialization
 ```bash

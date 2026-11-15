@@ -1,0 +1,28 @@
+# TWSD Connect — cPanel / Apache Root Protection & Public Rewrite
+# Recommended: Point cPanel Domain DocumentRoot directly to /public.
+# Fallback: If DocumentRoot points to the project root, block sensitive files and route traffic into public/.
+
+Options -Indexes
+
+# Block direct access to sensitive environment, composer, artisan, and hidden files
+<FilesMatch "(^\.|^artisan$|^composer\.(json|lock)$|^phpunit\.xml$|^Dockerfile$|^docker-compose\.yml$|\.md$)">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Never expose internal application or dependency directories via HTTP
+    RewriteRule ^(app|bootstrap|config|database|deploy|docker|resources|routes|scripts|storage|tests|vendor)(/|$) - [F,L,NC]
+    RewriteRule ^\. - [F,L]
+
+    # Route all non-public requests internally to public/
+    RewriteCond %{REQUEST_URI} !^/public/
+    RewriteRule ^(.*)$ public/$1 [L]
+</IfModule>

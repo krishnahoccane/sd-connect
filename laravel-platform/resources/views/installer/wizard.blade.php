@@ -388,7 +388,7 @@
             </dl>
 
             <div class="d-flex flex-wrap gap-2">
-                <a href="/login" class="btn btn-brand">Proceed to Sign In</a>
+                <a href="/" class="btn btn-brand">Open Identity Portal</a>
                 <a href="/super-admin/auth-settings" class="btn btn-outline-secondary">Open Super Admin Auth Settings</a>
             </div>
         </section>

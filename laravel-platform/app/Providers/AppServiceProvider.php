@@ -2,8 +2,11 @@
 
 namespace App\Providers;
 
+use App\Modules\Installation\Services\EnvFileWriter;
+use Illuminate\Encryption\Encrypter;
 use Illuminate\Support\ServiceProvider;
 use Laravel\Passport\Passport;
+use Throwable;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -23,6 +26,18 @@ class AppServiceProvider extends ServiceProvider
                 'session.driver' => 'file',
                 'cache.default' => 'file',
             ]);
+
+            if (empty(config('app.key')) && is_writable(base_path())) {
+                try {
+                    $bootstrapKey = 'base64:' . base64_encode(Encrypter::generateKey('AES-256-CBC'));
+                    app(EnvFileWriter::class)->updateValues(base_path('.env'), [
+                        'APP_KEY' => $bootstrapKey,
+                    ]);
+                    config(['app.key' => $bootstrapKey]);
+                } catch (Throwable) {
+                    // Handled gracefully if filesystem is read-only; InstallationCheckService surfaces permissions.
+                }
+            }
         }
 
         Passport::tokensExpireIn(
