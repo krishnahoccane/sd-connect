@@ -259,14 +259,16 @@
             </div>
             <div class="modal-body">
                 <input type="hidden" id="providerModalCode" value="">
+                <div id="providerModalInstructions" class="alert alert-light border small py-2 mb-3 d-none"></div>
                 <div id="providerModalNotice" class="alert alert-info small py-2 mb-3">
                     Secrets entered below are encrypted at rest and never sent back to the browser. Leave secret inputs blank to retain saved credentials.
                 </div>
+                <div id="providerModalError" class="alert alert-danger small py-2 mb-3 d-none"></div>
                 <div id="providerModalFields"></div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
-                <button type="submit" class="btn btn-dark btn-sm">Save Credentials</button>
+                <button type="submit" class="btn btn-dark btn-sm">Save Configuration</button>
             </div>
         </form>
     </div>
@@ -305,11 +307,32 @@
 const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
 const existingProviderSettings = @json($globalSettingsMap);
 
+const providerInstructions = {
+    firebase_sms: `
+        <div class="fw-semibold text-dark mb-1">How to get your Firebase Config:</div>
+        <ol class="ps-3 mb-2">
+            <li>Open the <strong>Firebase Console</strong> and select your project.</li>
+            <li>Go to <strong>Project settings</strong> (gear icon next to <em>Project Overview</em>).</li>
+            <li>Scroll to <strong>Your apps</strong> and select your <strong>Web app (&lt;/&gt;)</strong> (or click <em>Add app</em> &rarr; Web).</li>
+            <li>Under <strong>SDK setup and configuration</strong>, choose the <strong>Config</strong> radio option.</li>
+            <li>Copy the entire <code>const firebaseConfig = { ... };</code> block and paste it below.</li>
+        </ol>
+        <div class="text-muted">Also enable <strong>Authentication &rarr; Sign-in method &rarr; Phone</strong> in Firebase Console and add <code>{{ request()->getHost() }}</code> to <strong>Authorized domains</strong>.</div>
+    `
+};
+
 const providerSchemas = {
     firebase_sms: [
-        { name: 'project_id', label: 'Firebase Project ID', type: 'text', secret: false, required: true, placeholder: 'my-firebase-project' },
-        { name: 'api_key', label: 'Firebase Web API Key', type: 'text', secret: false, required: true, placeholder: 'AIza...' },
-        { name: 'service_account_json', label: 'Service Account JSON (Encrypted)', type: 'textarea', secret: true, required: false, placeholder: 'Paste Firebase Admin JSON or leave blank to retain' }
+        {
+            name: 'firebase_config_raw',
+            label: 'SDK setup and configuration > Config',
+            type: 'textarea',
+            rows: 9,
+            monospace: true,
+            secret: false,
+            required: true,
+            placeholder: 'const firebaseConfig = {\n  apiKey: "...",\n  authDomain: "your-project.firebaseapp.com",\n  databaseURL: "https://your-project.firebaseio.com",\n  projectId: "your-project",\n  storageBucket: "your-project.firebasestorage.app",\n  messagingSenderId: "...",\n  appId: "1:...:web:..."\n};'
+        }
     ],
     whatsapp_otp: [
         { name: 'api_base_url', label: 'Webglit / WhatsApp API Base URL', type: 'url', secret: false, required: true, placeholder: 'https://api.webglit.example/v1' },
@@ -329,12 +352,57 @@ const providerSchemas = {
     ]
 };
 
+function parseFirebaseConfigInput(rawText) {
+    const startIdx = rawText.indexOf('{');
+    const endIdx = rawText.lastIndexOf('}');
+    if (startIdx === -1 || endIdx === -1 || endIdx <= startIdx) {
+        throw new Error('Paste the full Firebase configuration object containing { apiKey, authDomain, projectId, ... }.');
+    }
+
+    // String-aware conversion from JS object literal (Firebase Console Config snippet) to strict JSON
+    let objText = rawText.slice(startIdx, endIdx + 1)
+        .replace(/"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (match, dq, sq) => {
+            if (dq !== undefined) return match;
+            if (sq !== undefined) return JSON.stringify(sq.replace(/\\'/g, "'"));
+            return '';
+        })
+        .replace(/([{,]\s*)([A-Za-z_$][A-Za-z0-9_$]*)\s*:/g, '$1"$2":')
+        .replace(/,\s*([}\]])/g, '$1');
+
+    let parsed;
+    try {
+        parsed = JSON.parse(objText);
+    } catch {
+        throw new Error('Could not parse the Firebase Config snippet. Copy the exact const firebaseConfig = { ... }; block from Firebase Console.');
+    }
+
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('Invalid Firebase Config object.');
+    }
+    if (!parsed.apiKey || !parsed.projectId) {
+        throw new Error('Firebase Config must include at least apiKey and projectId.');
+    }
+
+    return parsed;
+}
+
 function showFeedback(message, isError = false) {
     const el = document.getElementById('globalFeedback');
     el.className = `alert small mb-3 ${isError ? 'alert-danger' : 'alert-success'}`;
     el.textContent = message;
     el.classList.remove('d-none');
     window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function showModalError(message) {
+    const el = document.getElementById('providerModalError');
+    if (!message) {
+        el.classList.add('d-none');
+        el.textContent = '';
+        return;
+    }
+    el.textContent = message;
+    el.classList.remove('d-none');
 }
 
 async function parseError(res) {
@@ -352,6 +420,23 @@ async function parseError(res) {
 function openProviderModal(code, name) {
     document.getElementById('providerModalTitle').textContent = `Configure ${name}`;
     document.getElementById('providerModalCode').value = code;
+    showModalError('');
+
+    const instructionsEl = document.getElementById('providerModalInstructions');
+    if (providerInstructions[code]) {
+        instructionsEl.innerHTML = providerInstructions[code];
+        instructionsEl.classList.remove('d-none');
+    } else {
+        instructionsEl.innerHTML = '';
+        instructionsEl.classList.add('d-none');
+    }
+
+    const noticeEl = document.getElementById('providerModalNotice');
+    if (code === 'firebase_sms') {
+        noticeEl.classList.add('d-none');
+    } else {
+        noticeEl.classList.remove('d-none');
+    }
 
     const schema = providerSchemas[code] || [];
     const current = existingProviderSettings[code] || {};
@@ -370,17 +455,27 @@ function openProviderModal(code, name) {
         let input;
         if (field.type === 'textarea') {
             input = document.createElement('textarea');
-            input.rows = 3;
+            input.rows = field.rows || 3;
         } else {
             input = document.createElement('input');
             input.type = field.type;
         }
-        input.className = 'form-control form-control-sm';
+        input.className = `form-control form-control-sm${field.monospace ? ' font-monospace' : ''}`;
         input.name = field.name;
         input.dataset.isSecret = field.secret ? '1' : '0';
         input.placeholder = field.placeholder || '';
         if (field.required) input.required = true;
-        if (!field.secret && current[field.name] !== undefined && current[field.name] !== null) {
+
+        if (code === 'firebase_sms' && field.name === 'firebase_config_raw') {
+            if (current.firebase_config && typeof current.firebase_config === 'object') {
+                input.value = `const firebaseConfig = ${JSON.stringify(current.firebase_config, null, 2)};`;
+            } else if (current.api_key || current.project_id) {
+                input.value = `const firebaseConfig = ${JSON.stringify({
+                    apiKey: current.api_key || '',
+                    projectId: current.project_id || ''
+                }, null, 2)};`;
+            }
+        } else if (!field.secret && current[field.name] !== undefined && current[field.name] !== null) {
             input.value = current[field.name];
         }
 
@@ -394,20 +489,38 @@ function openProviderModal(code, name) {
 
 async function saveProviderConfig(e) {
     e.preventDefault();
+    showModalError('');
     const code = document.getElementById('providerModalCode').value;
     const inputs = document.getElementById('providerModalFields').querySelectorAll('input, textarea');
-    const public_settings = {};
+    let public_settings = {};
     const credentials = {};
 
-    inputs.forEach((el) => {
-        if (el.dataset.isSecret === '1') {
-            if (el.value.trim() !== '') {
-                credentials[el.name] = el.value.trim();
-            }
-        } else {
-            public_settings[el.name] = el.value.trim();
+    if (code === 'firebase_sms') {
+        const rawInput = document.getElementById('providerModalFields').querySelector('textarea[name="firebase_config_raw"]');
+        try {
+            const cfg = parseFirebaseConfigInput(rawInput ? rawInput.value : '');
+            public_settings = {
+                project_id: cfg.projectId,
+                api_key: cfg.apiKey,
+                auth_domain: cfg.authDomain || null,
+                app_id: cfg.appId || null,
+                firebase_config: cfg
+            };
+        } catch (err) {
+            showModalError(err.message);
+            return;
         }
-    });
+    } else {
+        inputs.forEach((el) => {
+            if (el.dataset.isSecret === '1') {
+                if (el.value.trim() !== '') {
+                    credentials[el.name] = el.value.trim();
+                }
+            } else {
+                public_settings[el.name] = el.value.trim();
+            }
+        });
+    }
 
     const res = await fetch(`/super-admin/providers/${encodeURIComponent(code)}/config`, {
         method: 'PUT',
@@ -423,7 +536,7 @@ async function saveProviderConfig(e) {
         window.location.reload();
         return;
     }
-    showFeedback(await parseError(res), true);
+    showModalError(await parseError(res));
 }
 
 async function toggleGlobalProvider(code, nextState) {
