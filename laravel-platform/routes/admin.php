@@ -22,6 +22,8 @@ use Illuminate\Support\Facades\Route;
 // Admin Console Session Authentication (satisfies Laravel's default route('login') redirect)
 Route::get('/admin/login', [AdminAuthController::class, 'showLogin'])->name('login');
 Route::post('/admin/login', [AdminAuthController::class, 'login'])->middleware('throttle:15,1')->name('admin.login.submit');
+Route::post('/admin/login/otp/send', [AdminAuthController::class, 'sendEmailOtp'])->middleware('throttle:10,1')->name('admin.login.otp.send');
+Route::post('/admin/login/otp/verify', [AdminAuthController::class, 'verifyEmailOtp'])->middleware('throttle:15,1')->name('admin.login.otp.verify');
 Route::post('/admin/logout', [AdminAuthController::class, 'logout'])->middleware('auth')->name('admin.logout');
 
 Route::prefix('super-admin')->middleware(['auth', EnsureActiveUser::class, EnsureSuperAdmin::class])->group(function (): void {
