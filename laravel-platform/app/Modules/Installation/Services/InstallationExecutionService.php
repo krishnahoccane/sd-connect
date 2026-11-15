@@ -22,6 +22,7 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 use PDO;
+use phpseclib3\Crypt\RSA;
 use RuntimeException;
 use Throwable;
 
@@ -210,16 +211,32 @@ class InstallationExecutionService
 
         Artisan::call('migrate', ['--force' => true]);
 
-        if (!file_exists(storage_path('oauth-private.key')) || !file_exists(storage_path('oauth-public.key'))) {
-            Artisan::call('passport:keys', ['--force' => true]);
+        // PassportServiceProvider only registers vendor migrations when runningInConsole() is true
+        $passportMigrationsPath = base_path('vendor/laravel/passport/database/migrations');
+        if (!Schema::hasTable('oauth_clients') && is_dir($passportMigrationsPath)) {
+            Artisan::call('migrate', [
+                '--path' => 'vendor/laravel/passport/database/migrations',
+                '--force' => true,
+            ]);
+        }
+
+        // Generate Passport OAuth RSA-4096 keys directly (passport:keys command is only registered in CLI console)
+        $privateKeyPath = storage_path('oauth-private.key');
+        $publicKeyPath = storage_path('oauth-public.key');
+        if (!file_exists($privateKeyPath) || !file_exists($publicKeyPath)) {
+            $rsa = RSA::createKey(4096);
+            file_put_contents($privateKeyPath, $rsa->toString('PKCS8'), LOCK_EX);
+            file_put_contents($publicKeyPath, $rsa->getPublicKey()->toString('PKCS8'), LOCK_EX);
+            @chmod($privateKeyPath, 0600);
+            @chmod($publicKeyPath, 0660);
         }
 
         if (!\App\Models\SigningKeyMetadata::query()->where('status', 'active')->exists()) {
             $this->oidcService->generateAndActivateSigningKey();
         }
 
-        Artisan::call('db:seed', ['--class' => AuthProviderSeeder::class, '--force' => true]);
-        Artisan::call('db:seed', ['--class' => RolePermissionSeeder::class, '--force' => true]);
+        app(AuthProviderSeeder::class)->run();
+        app(RolePermissionSeeder::class)->run();
 
         return [
             'migrated' => true,
