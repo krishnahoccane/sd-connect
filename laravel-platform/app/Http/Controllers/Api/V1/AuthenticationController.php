@@ -11,6 +11,7 @@ use App\Modules\Authentication\Services\AuthenticationPolicyService;
 use App\Modules\OIDC\Services\OAuthAuthorizationBridgeService;
 use App\Modules\Providers\Email\Services\EmailOtpProvider;
 use App\Modules\Providers\Email\Services\EmailPasswordProvider;
+use App\Modules\Providers\WhatsApp\Services\WhatsAppOtpProvider;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -23,6 +24,7 @@ class AuthenticationController extends Controller
         private readonly AuthenticationPolicyService $policyService,
         private readonly EmailPasswordProvider $emailPasswordProvider,
         private readonly EmailOtpProvider $emailOtpProvider,
+        private readonly WhatsAppOtpProvider $whatsAppOtpProvider,
         private readonly OAuthAuthorizationBridgeService $oauthBridge,
         private readonly AuditService $auditService
     ) {
@@ -143,6 +145,66 @@ class AuthenticationController extends Controller
 
         $user = User::query()->findOrFail($result['claims']['user_id']);
         return $this->completeAuthentication($user, $request, ['otp'], $validated['oauth_transaction_id'] ?? null, 'email_otp');
+    }
+
+    public function sendWhatsAppOtp(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'phone' => ['required', 'string', 'max:32'],
+            'purpose' => ['nullable', 'in:signin,identity_link,password_reset'],
+        ]);
+
+        $organisation = $request->attributes->get('resolved_organisation');
+        $application = $request->attributes->get('resolved_application');
+
+        $policy = $this->policyService->resolveEffectiveMethods($organisation, $application);
+        $allowed = collect($policy['methods'])->firstWhere('provider_code', 'whatsapp_otp');
+        if (!$allowed) {
+            return response()->json(['error' => 'auth_method_not_permitted'], 403);
+        }
+
+        try {
+            $issued = $this->whatsAppOtpProvider->sendOtp(
+                organisation: $organisation,
+                application: $application,
+                phone: $validated['phone'],
+                purpose: $validated['purpose'] ?? 'signin',
+                request: $request
+            );
+
+            return response()->json(['data' => $issued]);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['error' => 'otp_request_rejected', 'message' => $e->getMessage()], 422);
+        }
+    }
+
+    public function verifyWhatsAppOtp(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'transaction_uuid' => ['required', 'uuid'],
+            'otp' => ['required', 'string', 'min:4', 'max:8'],
+            'phone' => ['required', 'string', 'max:32'],
+            'purpose' => ['nullable', 'in:signin,identity_link,password_reset'],
+            'oauth_transaction_id' => ['nullable', 'uuid'],
+        ]);
+
+        $organisation = $request->attributes->get('resolved_organisation');
+        $application = $request->attributes->get('resolved_application');
+
+        $result = $this->whatsAppOtpProvider->authenticate([
+            'transaction_uuid' => $validated['transaction_uuid'],
+            'otp' => $validated['otp'],
+            'phone' => $validated['phone'],
+            'purpose' => $validated['purpose'] ?? 'signin',
+            'request' => $request,
+        ], $organisation, $application);
+
+        if (!$result['authenticated']) {
+            return response()->json(['error' => 'otp_verification_failed', 'message' => $result['error']], 422);
+        }
+
+        $user = User::query()->findOrFail($result['claims']['user_id']);
+        return $this->completeAuthentication($user, $request, ['otp', 'whatsapp'], $validated['oauth_transaction_id'] ?? null, 'whatsapp_otp');
     }
 
     public function forgotPassword(Request $request): JsonResponse

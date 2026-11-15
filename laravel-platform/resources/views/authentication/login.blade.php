@@ -50,6 +50,23 @@
             </div>
         </div>
     @endif
+
+    @if(in_array('whatsapp_otp', $enabledCodes, true))
+        <div class="border-top pt-3 mt-3">
+            <div class="small fw-medium mb-2">Sign in with WhatsApp OTP</div>
+            <div class="input-group input-group-sm mb-2">
+                <input type="tel" id="waOtpPhone" class="form-control font-monospace" placeholder="919876543210">
+                <button type="button" class="btn btn-outline-secondary" onclick="sendWhatsAppOtp()">Send Code</button>
+            </div>
+            <div id="waOtpVerifyBox" class="d-none">
+                <input type="hidden" id="waOtpTxUuid">
+                <div class="input-group input-group-sm">
+                    <input type="text" id="waOtpCode" class="form-control font-monospace" placeholder="6-digit code" maxlength="8">
+                    <button type="button" class="btn btn-brand" onclick="verifyWhatsAppOtp()">Verify OTP</button>
+                </div>
+            </div>
+        </div>
+    @endif
 @endsection
 
 @push('scripts')
@@ -106,6 +123,35 @@ async function verifyEmailOtp() {
     });
     const json = await res.json();
     if (!res.ok) return showAuthError(json.message || json.error || 'Invalid OTP.');
+    if (json.data?.redirect_uri) window.location.href = json.data.redirect_uri;
+}
+
+async function sendWhatsAppOtp() {
+    const res = await fetch('/api/v1/auth/whatsapp/otp/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({ client_id: clientId, phone: document.getElementById('waOtpPhone').value })
+    });
+    const json = await res.json();
+    if (!res.ok) return showAuthError(json.message || json.error || 'Unable to send WhatsApp OTP.');
+    document.getElementById('waOtpTxUuid').value = json.data.transaction_uuid;
+    document.getElementById('waOtpVerifyBox').classList.remove('d-none');
+}
+
+async function verifyWhatsAppOtp() {
+    const res = await fetch('/api/v1/auth/whatsapp/otp/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({
+            client_id: clientId,
+            oauth_transaction_id: oauthTransactionId,
+            transaction_uuid: document.getElementById('waOtpTxUuid').value,
+            phone: document.getElementById('waOtpPhone').value,
+            otp: document.getElementById('waOtpCode').value
+        })
+    });
+    const json = await res.json();
+    if (!res.ok) return showAuthError(json.message || json.error || 'Invalid WhatsApp OTP.');
     if (json.data?.redirect_uri) window.location.href = json.data.redirect_uri;
 }
 </script>

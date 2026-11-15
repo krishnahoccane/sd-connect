@@ -31,4 +31,14 @@ class OtpHasher
         $visible = mb_substr($local, 0, min(2, mb_strlen($local)));
         return $visible . str_repeat('*', max(2, mb_strlen($local) - 2)) . '@' . $parts[1];
     }
+
+    public function maskPhone(string $phone): string
+    {
+        $digits = preg_replace('/\D+/', '', $phone) ?? '';
+        if (strlen($digits) <= 4) {
+            return '****';
+        }
+
+        return substr($digits, 0, 2) . str_repeat('*', max(2, strlen($digits) - 4)) . substr($digits, -2);
+    }
 }

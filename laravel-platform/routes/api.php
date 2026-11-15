@@ -54,6 +54,8 @@ Route::prefix('api/v1')->group(function (): void {
         Route::post('/email/password', [AuthenticationController::class, 'emailPassword']);
         Route::post('/email/otp/send', [AuthenticationController::class, 'sendEmailOtp']);
         Route::post('/email/otp/verify', [AuthenticationController::class, 'verifyEmailOtp']);
+        Route::post('/whatsapp/otp/send', [AuthenticationController::class, 'sendWhatsAppOtp']);
+        Route::post('/whatsapp/otp/verify', [AuthenticationController::class, 'verifyWhatsAppOtp']);
         Route::post('/password/forgot', [AuthenticationController::class, 'forgotPassword']);
         Route::post('/password/reset', [AuthenticationController::class, 'resetPassword']);
     });

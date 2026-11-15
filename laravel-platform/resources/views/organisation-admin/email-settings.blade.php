@@ -13,7 +13,7 @@
 
 @section('content')
 @php
-    $liveRuntimeCodes = ['email_password', 'email_otp'];
+    $liveRuntimeCodes = ['email_password', 'email_otp', 'whatsapp_otp'];
     $orgSmtp = $emailConfig?->smtp_settings ?? [];
 @endphp
 

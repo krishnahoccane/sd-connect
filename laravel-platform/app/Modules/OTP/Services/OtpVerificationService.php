@@ -114,7 +114,9 @@ class OtpVerificationService
                 'user_id' => $user?->id,
                 'channel' => $channel,
                 'recipient_hash' => $recipientHash,
-                'recipient_masked' => $this->hasher->maskEmail($recipient),
+                'recipient_masked' => $channel === 'email_otp'
+                    ? $this->hasher->maskEmail($recipient)
+                    : $this->hasher->maskPhone($recipient),
                 'otp_hash' => $this->hasher->hash($plainOtp, $uuid),
                 'purpose' => $purpose,
                 'attempt_count' => 0,

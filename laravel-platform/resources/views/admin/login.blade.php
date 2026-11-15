@@ -3,9 +3,10 @@
 @section('content')
     @php
         $showPassword = $emailPasswordEnabled || $emergencyFallback;
-        $showOtp = $emailOtpEnabled;
-        $bothShown = $showPassword && $showOtp;
-        $defaultTab = $showPassword ? 'password' : 'otp';
+        $showEmailOtp = $emailOtpEnabled;
+        $showWhatsappOtp = $whatsappOtpEnabled ?? false;
+        $visibleTabCount = ($showPassword ? 1 : 0) + ($showEmailOtp ? 1 : 0) + ($showWhatsappOtp ? 1 : 0);
+        $defaultTab = $showPassword ? 'password' : ($showEmailOtp ? 'otp' : 'whatsapp');
     @endphp
 
     <div class="mb-3">
@@ -35,18 +36,29 @@
 
     <div id="otpFeedback" class="alert d-none small py-2" role="alert"></div>
 
-    @if ($bothShown)
+    @if ($visibleTabCount > 1)
         <ul class="nav nav-pills nav-fill bg-light p-1 rounded mb-3 small" id="adminLoginTabs" role="tablist">
-            <li class="nav-item" role="presentation">
-                <button class="nav-link active py-1" id="tab-password-btn" data-bs-toggle="tab" data-bs-target="#tab-password-pane" type="button" role="tab">
-                    Email &amp; Password
-                </button>
-            </li>
-            <li class="nav-item" role="presentation">
-                <button class="nav-link py-1" id="tab-otp-btn" data-bs-toggle="tab" data-bs-target="#tab-otp-pane" type="button" role="tab">
-                    Email OTP
-                </button>
-            </li>
+            @if ($showPassword)
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link {{ $defaultTab === 'password' ? 'active' : '' }} py-1" id="tab-password-btn" data-bs-toggle="tab" data-bs-target="#tab-password-pane" type="button" role="tab">
+                        Password
+                    </button>
+                </li>
+            @endif
+            @if ($showEmailOtp)
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link {{ $defaultTab === 'otp' ? 'active' : '' }} py-1" id="tab-otp-btn" data-bs-toggle="tab" data-bs-target="#tab-otp-pane" type="button" role="tab">
+                        Email OTP
+                    </button>
+                </li>
+            @endif
+            @if ($showWhatsappOtp)
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link {{ $defaultTab === 'whatsapp' ? 'active' : '' }} py-1" id="tab-wa-btn" data-bs-toggle="tab" data-bs-target="#tab-wa-pane" type="button" role="tab">
+                        WhatsApp OTP
+                    </button>
+                </li>
+            @endif
         </ul>
     @endif
 
@@ -90,11 +102,11 @@
             </div>
         @endif
 
-        @if ($showOtp)
+        @if ($showEmailOtp)
             <div class="tab-pane fade {{ $defaultTab === 'otp' ? 'show active' : '' }}" id="tab-otp-pane" role="tabpanel">
                 @if (!$emailOtpSenderReady)
                     <div class="alert alert-warning small py-2 mb-3">
-                        <strong>Email OTP is enabled globally</strong>, but the Platform Default Email Sender is not verified yet. Sign in with your password and verify delivery via <em>Send Test</em> in Global Auth &amp; Email settings.
+                        <strong>Email OTP is enabled globally</strong>, but the Platform Default Email Sender is not verified yet. Sign in and verify delivery via <em>Send Test</em> in Global Auth &amp; Email settings.
                     </div>
                 @endif
 
@@ -147,6 +159,62 @@
                 </form>
             </div>
         @endif
+
+        @if ($showWhatsappOtp)
+            <div class="tab-pane fade {{ $defaultTab === 'whatsapp' ? 'show active' : '' }}" id="tab-wa-pane" role="tabpanel">
+                @if (!($whatsappOtpReady ?? false))
+                    <div class="alert alert-warning small py-2 mb-3">
+                        <strong>WhatsApp OTP is enabled globally</strong>, but <code>appkey</code> and <code>authkey</code> are not saved yet. Sign in and click <em>Configure</em> on WhatsApp OTP (Webglit).
+                    </div>
+                @endif
+
+                <form id="waOtpRequestForm" onsubmit="requestAdminWaOtp(event)" novalidate>
+                    <div class="mb-3">
+                        <label for="wa_identifier" class="form-label small fw-semibold">Mobile Number or Admin Email</label>
+                        <input
+                            type="text"
+                            id="wa_identifier"
+                            class="form-control"
+                            placeholder="919876543210 or admin@connect.twsd.me"
+                            required
+                            @disabled(!($whatsappOtpReady ?? false))
+                        >
+                        <div class="form-text">Uses your profile&rsquo;s registered phone number (international digits without +).</div>
+                    </div>
+                    <button type="submit" id="sendWaOtpBtn" class="btn btn-brand w-100 fw-medium" @disabled(!($whatsappOtpReady ?? false))>
+                        Send WhatsApp OTP
+                    </button>
+                </form>
+
+                <form id="waOtpVerifyForm" class="d-none" onsubmit="verifyAdminWaOtp(event)" novalidate>
+                    <input type="hidden" id="waChallengeUuid" value="">
+                    <div class="small text-muted mb-2" id="waMaskedNotice"></div>
+                    <div class="mb-3">
+                        <label for="wa_otp_code" class="form-label small fw-semibold">6-Digit WhatsApp Code</label>
+                        <input
+                            type="text"
+                            id="wa_otp_code"
+                            inputmode="numeric"
+                            autocomplete="one-time-code"
+                            maxlength="8"
+                            class="form-control font-monospace text-center fs-5 tracking-widest"
+                            placeholder="000000"
+                            required
+                        >
+                    </div>
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" class="form-check-input" id="waRemember" value="1">
+                        <label class="form-check-label small text-secondary" for="waRemember">Keep session signed in</label>
+                    </div>
+                    <button type="submit" id="verifyWaOtpBtn" class="btn btn-brand w-100 fw-medium mb-2">
+                        Verify WhatsApp OTP &amp; Sign In
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm w-100" onclick="resetWaOtpFlow()">
+                        Use Different Number / Resend Code
+                    </button>
+                </form>
+            </div>
+        @endif
     </div>
 @endsection
 
@@ -172,6 +240,14 @@ function resetOtpFlow() {
     document.getElementById('otpRequestForm').classList.remove('d-none');
     document.getElementById('otp_code').value = '';
     document.getElementById('otpChallengeUuid').value = '';
+}
+
+function resetWaOtpFlow() {
+    clearOtpFeedback();
+    document.getElementById('waOtpVerifyForm').classList.add('d-none');
+    document.getElementById('waOtpRequestForm').classList.remove('d-none');
+    document.getElementById('wa_otp_code').value = '';
+    document.getElementById('waChallengeUuid').value = '';
 }
 
 async function parseOtpError(res) {
@@ -253,6 +329,80 @@ async function verifyAdminOtp(e) {
         window.location.href = json.data.redirect_to || '{{ route('super-admin.auth-settings') }}';
     } catch (err) {
         showOtpFeedback(`Network error: ${err?.message || 'Unable to verify OTP'}`, true);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = orig;
+    }
+}
+
+async function requestAdminWaOtp(e) {
+    e.preventDefault();
+    clearOtpFeedback();
+    const identifier = document.getElementById('wa_identifier').value.trim();
+    const btn = document.getElementById('sendWaOtpBtn');
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Sending WhatsApp...';
+
+    try {
+        const res = await fetch('{{ route('admin.login.whatsapp.send') }}', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'X-CSRF-TOKEN': csrfToken
+            },
+            body: JSON.stringify({ identifier })
+        });
+        if (!res.ok) {
+            showOtpFeedback(await parseOtpError(res), true);
+            return;
+        }
+        const json = await res.json();
+        document.getElementById('waChallengeUuid').value = json.data.challenge_uuid;
+        document.getElementById('waMaskedNotice').textContent = `Enter the WhatsApp code sent to ${json.data.recipient_masked}.`;
+        document.getElementById('waOtpRequestForm').classList.add('d-none');
+        document.getElementById('waOtpVerifyForm').classList.remove('d-none');
+        document.getElementById('wa_otp_code').focus();
+        showOtpFeedback('WhatsApp verification code sent.', false);
+    } catch (err) {
+        showOtpFeedback(`Network error: ${err?.message || 'Unable to send WhatsApp OTP'}`, true);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = orig;
+    }
+}
+
+async function verifyAdminWaOtp(e) {
+    e.preventDefault();
+    clearOtpFeedback();
+    const btn = document.getElementById('verifyWaOtpBtn');
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Verifying...';
+
+    try {
+        const res = await fetch('{{ route('admin.login.whatsapp.verify') }}', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'X-CSRF-TOKEN': csrfToken
+            },
+            body: JSON.stringify({
+                challenge_uuid: document.getElementById('waChallengeUuid').value,
+                otp: document.getElementById('wa_otp_code').value.trim(),
+                remember: document.getElementById('waRemember').checked
+            })
+        });
+        if (!res.ok) {
+            showOtpFeedback(await parseOtpError(res), true);
+            return;
+        }
+        const json = await res.json();
+        window.location.href = json.data.redirect_to || '{{ route('super-admin.auth-settings') }}';
+    } catch (err) {
+        showOtpFeedback(`Network error: ${err?.message || 'Unable to verify WhatsApp OTP'}`, true);
     } finally {
         btn.disabled = false;
         btn.textContent = orig;

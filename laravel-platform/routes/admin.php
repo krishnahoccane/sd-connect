@@ -25,6 +25,8 @@ Route::get('/admin/login', [AdminAuthController::class, 'showLogin'])->name('log
 Route::post('/admin/login', [AdminAuthController::class, 'login'])->middleware('throttle:15,1')->name('admin.login.submit');
 Route::post('/admin/login/otp/send', [AdminAuthController::class, 'sendEmailOtp'])->middleware('throttle:10,1')->name('admin.login.otp.send');
 Route::post('/admin/login/otp/verify', [AdminAuthController::class, 'verifyEmailOtp'])->middleware('throttle:15,1')->name('admin.login.otp.verify');
+Route::post('/admin/login/whatsapp/send', [AdminAuthController::class, 'sendWhatsAppOtp'])->middleware('throttle:10,1')->name('admin.login.whatsapp.send');
+Route::post('/admin/login/whatsapp/verify', [AdminAuthController::class, 'verifyWhatsAppOtp'])->middleware('throttle:15,1')->name('admin.login.whatsapp.verify');
 Route::post('/admin/logout', [AdminAuthController::class, 'logout'])->middleware('auth')->name('admin.logout');
 
 Route::middleware(['auth', EnsureActiveUser::class])->group(function (): void {
@@ -58,6 +60,8 @@ Route::prefix('super-admin')->middleware(['auth', EnsureActiveUser::class, Ensur
         ->name('super-admin.providers.email.test');
     Route::post('/providers/firebase_sms/test', [GlobalAuthAdminController::class, 'testFirebaseSms'])
         ->name('super-admin.providers.firebase-sms.test');
+    Route::post('/providers/whatsapp_otp/test', [GlobalAuthAdminController::class, 'testWhatsAppOtp'])
+        ->name('super-admin.providers.whatsapp.test');
     Route::put('/providers/{providerCode}/config', [GlobalAuthAdminController::class, 'upsertProviderConfiguration'])
         ->name('super-admin.providers.config');
     Route::put('/providers/{providerCode}', [GlobalAuthAdminController::class, 'toggleGlobalProvider'])

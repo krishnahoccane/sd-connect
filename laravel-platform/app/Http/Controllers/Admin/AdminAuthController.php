@@ -11,6 +11,7 @@ use App\Modules\Audit\Services\AuditService;
 use App\Modules\OTP\Services\OtpGenerator;
 use App\Modules\OTP\Services\OtpHasher;
 use App\Modules\Providers\Email\Services\EmailConfigurationService;
+use App\Modules\Providers\WhatsApp\Services\WhatsAppOtpService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -24,11 +25,12 @@ use Throwable;
 
 class AdminAuthController extends Controller
 {
-    private const LIVE_PROVIDER_CODES = ['email_password', 'email_otp'];
+    private const LIVE_PROVIDER_CODES = ['email_password', 'email_otp', 'whatsapp_otp'];
 
     public function __construct(
         private readonly AuditService $auditService,
         private readonly EmailConfigurationService $emailConfigService,
+        private readonly WhatsAppOtpService $whatsAppOtpService,
         private readonly OtpGenerator $otpGenerator,
         private readonly OtpHasher $otpHasher
     ) {
@@ -54,20 +56,25 @@ class AdminAuthController extends Controller
         $enabledCodes = $enabledLiveProviders->pluck('code')->all();
         $emailPasswordEnabled = in_array('email_password', $enabledCodes, true);
         $emailOtpEnabled = in_array('email_otp', $enabledCodes, true);
+        $whatsappOtpEnabled = in_array('whatsapp_otp', $enabledCodes, true);
 
         $platformEmail = EmailConfiguration::query()
             ->where('scope', 'global')
             ->whereNull('organisation_id')
             ->first();
         $emailOtpSenderReady = (bool) ($platformEmail && $platformEmail->is_verified);
+        $whatsappOtpReady = $this->whatsAppOtpService->hasCredentials();
 
-        $emergencyFallback = !$emailPasswordEnabled && (!$emailOtpEnabled || !$emailOtpSenderReady);
+        $anyOtpReady = ($emailOtpEnabled && $emailOtpSenderReady) || ($whatsappOtpEnabled && $whatsappOtpReady);
+        $emergencyFallback = !$emailPasswordEnabled && !$anyOtpReady;
 
         return view('admin.login', [
             'enabledLiveProviders' => $enabledLiveProviders,
             'emailPasswordEnabled' => $emailPasswordEnabled,
             'emailOtpEnabled' => $emailOtpEnabled,
             'emailOtpSenderReady' => $emailOtpSenderReady,
+            'whatsappOtpEnabled' => $whatsappOtpEnabled,
+            'whatsappOtpReady' => $whatsappOtpReady,
             'emergencyFallback' => $emergencyFallback,
         ]);
     }
@@ -367,6 +374,238 @@ class AdminAuthController extends Controller
         }
 
         $this->completeAdminSessionLogin($user, $request, 'email_otp');
+
+        return response()->json([
+            'data' => [
+                'authenticated' => true,
+                'redirect_to' => session()->pull('url.intended', $this->resolvePostLoginRedirect($user)),
+            ],
+        ]);
+    }
+
+    public function sendWhatsAppOtp(Request $request): JsonResponse
+    {
+        $waEnabled = AuthProvider::query()
+            ->where('code', 'whatsapp_otp')
+            ->where('is_globally_enabled', true)
+            ->exists();
+
+        if (!$waEnabled) {
+            return response()->json([
+                'error' => 'provider_disabled',
+                'message' => 'WhatsApp OTP is disabled globally by Super Admin.',
+            ], 403);
+        }
+
+        if (!$this->whatsAppOtpService->hasCredentials()) {
+            return response()->json([
+                'error' => 'whatsapp_unconfigured',
+                'message' => 'WhatsApp OTP appkey and authkey must be configured in Super Admin settings first.',
+            ], 422);
+        }
+
+        $validated = $request->validate([
+            'identifier' => ['required', 'string', 'max:255'],
+        ]);
+
+        $rawIdentifier = trim($validated['identifier']);
+        if (str_contains($rawIdentifier, '@')) {
+            $user = User::query()->where('primary_email', strtolower($rawIdentifier))->first();
+        } else {
+            try {
+                $digits = $this->whatsAppOtpService->normalizePhoneDigits($rawIdentifier);
+            } catch (\InvalidArgumentException $e) {
+                return response()->json(['error' => 'invalid_phone', 'message' => $e->getMessage()], 422);
+            }
+            $user = User::query()->whereIn('primary_phone', ["+{$digits}", $digits])->first();
+        }
+
+        if (!$user) {
+            return response()->json([
+                'error' => 'account_not_found',
+                'message' => 'No active admin account found for that phone number or email.',
+            ], 422);
+        }
+
+        if (!$user->isGloballyActive()) {
+            return response()->json([
+                'error' => 'account_inactive',
+                'message' => 'This account is suspended or locked.',
+            ], 422);
+        }
+
+        $hasConsoleAccess = $user->is_super_admin
+            || $user->memberships()->where('membership_status', 'active')->exists();
+
+        if (!$hasConsoleAccess) {
+            return response()->json([
+                'error' => 'console_access_denied',
+                'message' => 'This account does not have active admin console access.',
+            ], 403);
+        }
+
+        if (empty($user->primary_phone)) {
+            return response()->json([
+                'error' => 'phone_not_set',
+                'message' => 'No mobile phone number is saved on your account. Add it under My Profile first.',
+            ], 422);
+        }
+
+        $phoneDigits = $this->whatsAppOtpService->normalizePhoneDigits((string) $user->primary_phone);
+        $cooldownKey = 'admin_wa_otp_cooldown:' . $this->otpHasher->hashRecipient($phoneDigits);
+        if (Cache::has($cooldownKey)) {
+            return response()->json([
+                'error' => 'otp_cooldown',
+                'message' => 'Please wait 60 seconds before requesting another WhatsApp code.',
+            ], 429);
+        }
+
+        $digitsCount = (int) config('twsd_connect.otp.digits', 6);
+        $expirySeconds = (int) config('twsd_connect.otp.expiry_seconds', 300);
+        $cooldownSeconds = (int) config('twsd_connect.otp.resend_cooldown_seconds', 60);
+        $maxAttempts = (int) config('twsd_connect.otp.max_verification_attempts', 5);
+
+        $challengeUuid = (string) Str::uuid();
+        $plainOtp = $this->otpGenerator->generateNumeric($digitsCount);
+        $expiryMinutes = max(1, (int) ceil($expirySeconds / 60));
+
+        try {
+            $message = "{$plainOtp} is your TWSD Connect Admin Console sign-in code. Valid for {$expiryMinutes} minutes.";
+            $this->whatsAppOtpService->sendMessage($phoneDigits, $message);
+        } catch (Throwable $e) {
+            Log::warning('Admin login WhatsApp OTP delivery failed', [
+                'user_uuid' => $user->uuid,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'error' => 'whatsapp_delivery_failed',
+                'message' => 'WhatsApp delivery failed: ' . trim($e->getMessage()),
+            ], 422);
+        }
+
+        Cache::put("admin_wa_otp_challenge:{$challengeUuid}", [
+            'user_id' => $user->id,
+            'phone_digits' => $phoneDigits,
+            'otp_hash' => $this->otpHasher->hash($plainOtp, $challengeUuid),
+            'attempts' => 0,
+            'max_attempts' => $maxAttempts,
+            'session_id' => $request->session()->getId(),
+            'expires_at' => now()->addSeconds($expirySeconds)->timestamp,
+        ], now()->addSeconds($expirySeconds));
+
+        Cache::put($cooldownKey, true, now()->addSeconds($cooldownSeconds));
+
+        $this->auditService->record(
+            action: 'admin.whatsapp_otp_sent',
+            actor: $user,
+            targetType: 'user',
+            targetUuid: $user->uuid,
+            afterState: ['channel' => 'whatsapp_otp'],
+            request: $request,
+            actorRole: $user->is_super_admin ? 'super_admin' : 'user'
+        );
+
+        return response()->json([
+            'data' => [
+                'challenge_uuid' => $challengeUuid,
+                'recipient_masked' => $this->otpHasher->maskPhone($phoneDigits),
+                'expires_in_seconds' => $expirySeconds,
+            ],
+        ]);
+    }
+
+    public function verifyWhatsAppOtp(Request $request): JsonResponse
+    {
+        $waEnabled = AuthProvider::query()
+            ->where('code', 'whatsapp_otp')
+            ->where('is_globally_enabled', true)
+            ->exists();
+
+        if (!$waEnabled) {
+            return response()->json([
+                'error' => 'provider_disabled',
+                'message' => 'WhatsApp OTP is disabled globally.',
+            ], 403);
+        }
+
+        $validated = $request->validate([
+            'challenge_uuid' => ['required', 'uuid'],
+            'otp' => ['required', 'string', 'min:4', 'max:8'],
+            'remember' => ['nullable', 'boolean'],
+        ]);
+
+        $challengeUuid = $validated['challenge_uuid'];
+        $cacheKey = "admin_wa_otp_challenge:{$challengeUuid}";
+        $challenge = Cache::get($cacheKey);
+
+        if (!is_array($challenge)) {
+            return response()->json([
+                'error' => 'otp_expired',
+                'message' => 'WhatsApp OTP challenge has expired or was already used. Request a new code.',
+            ], 422);
+        }
+
+        if (!hash_equals((string) ($challenge['session_id'] ?? ''), $request->session()->getId())) {
+            return response()->json([
+                'error' => 'otp_context_mismatch',
+                'message' => 'OTP session mismatch. Please request a fresh verification code.',
+            ], 422);
+        }
+
+        if ((int) ($challenge['expires_at'] ?? 0) < now()->timestamp) {
+            Cache::forget($cacheKey);
+            return response()->json([
+                'error' => 'otp_expired',
+                'message' => 'WhatsApp OTP code has expired. Please request a new code.',
+            ], 422);
+        }
+
+        $attempts = (int) ($challenge['attempts'] ?? 0);
+        $maxAttempts = (int) ($challenge['max_attempts'] ?? 5);
+        if ($attempts >= $maxAttempts) {
+            Cache::forget($cacheKey);
+            return response()->json([
+                'error' => 'otp_exhausted',
+                'message' => 'Maximum verification attempts exceeded. Please request a new code.',
+            ], 422);
+        }
+
+        if (!$this->otpHasher->verify(trim($validated['otp']), $challengeUuid, (string) ($challenge['otp_hash'] ?? ''))) {
+            $attempts++;
+            if ($attempts >= $maxAttempts) {
+                Cache::forget($cacheKey);
+                return response()->json([
+                    'error' => 'otp_exhausted',
+                    'message' => 'Invalid code and maximum attempts exceeded. Please request a new code.',
+                ], 422);
+            }
+
+            $challenge['attempts'] = $attempts;
+            $remainingSeconds = max(1, (int) $challenge['expires_at'] - now()->timestamp);
+            Cache::put($cacheKey, $challenge, now()->addSeconds($remainingSeconds));
+
+            return response()->json([
+                'error' => 'otp_invalid',
+                'message' => 'Invalid WhatsApp verification code.',
+            ], 422);
+        }
+
+        Cache::forget($cacheKey);
+
+        $user = User::query()->find((int) ($challenge['user_id'] ?? 0));
+        if (!$user || !$user->isGloballyActive()) {
+            return response()->json([
+                'error' => 'account_inactive',
+                'message' => 'This account is suspended or locked.',
+            ], 403);
+        }
+
+        if ($user->phone_verified_at === null) {
+            $user->update(['phone_verified_at' => now()]);
+        }
+
+        $this->completeAdminSessionLogin($user, $request, 'whatsapp_otp');
 
         return response()->json([
             'data' => [

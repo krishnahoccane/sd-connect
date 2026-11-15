@@ -44,7 +44,7 @@ class AuthProviderSeeder extends Seeder
                 'code' => 'whatsapp_otp',
                 'name' => 'WhatsApp OTP (Webglit)',
                 'category' => 'otp',
-                'is_globally_enabled' => false,
+                'is_globally_enabled' => true,
                 'supports_org_credentials' => true,
                 'requires_external_health' => true,
                 'health_status' => 'unconfigured',

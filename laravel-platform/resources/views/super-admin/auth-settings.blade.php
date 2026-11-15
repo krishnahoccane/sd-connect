@@ -12,7 +12,7 @@
 
 @section('content')
 @php
-    $liveRuntimeCodes = ['email_password', 'email_otp'];
+    $liveRuntimeCodes = ['email_password', 'email_otp', 'whatsapp_otp'];
     $configurableCodes = ['firebase_sms', 'whatsapp_otp', 'google', 'microsoft'];
     $globalSettingsMap = [];
     foreach ($configurableCodes as $c) {
@@ -95,6 +95,12 @@
                                                     onclick="openFirebaseSmsTestModal()">
                                                     Test SMS
                                                 </button>
+                                            @elseif($provider->code === 'whatsapp_otp' && ($hasConfig || $provider->is_globally_enabled))
+                                                <button type="button"
+                                                    class="btn btn-sm btn-outline-primary"
+                                                    onclick="openWhatsAppTestModal()">
+                                                    Test WhatsApp
+                                                </button>
                                             @endif
                                         @elseif($provider->code === 'email_otp')
                                             <a href="#platform-email-section" class="btn btn-sm btn-outline-secondary">Email Form &rarr;</a>
@@ -112,7 +118,7 @@
                 </table>
             </div>
             <div class="card-footer bg-white small text-muted">
-                <strong>Live:</strong> <code>email_password</code> and <code>email_otp</code> are wired to end-user login &amp; OIDC token issuance. <strong>Credentials Only:</strong> <code>firebase_sms</code>, <code>whatsapp_otp</code>, <code>google</code>, and <code>microsoft</code> store encrypted platform keys cleanly here while interactive OAuth/SMS login flows are slated for Phases 6&ndash;7.
+                <strong>Live:</strong> <code>email_password</code>, <code>email_otp</code>, and <code>whatsapp_otp</code> are wired to live login &amp; OTP delivery. <strong>Credentials Only:</strong> <code>firebase_sms</code>, <code>google</code>, and <code>microsoft</code> store platform config &amp; keys cleanly while end-user OAuth/SMS login flows are slated for Phases 6&ndash;7.
             </div>
         </div>
     </div>
@@ -346,6 +352,37 @@
         </div>
     </div>
 </div>
+
+<!-- Test WhatsApp OTP Modal -->
+<div class="modal fade" id="testWhatsAppModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <form class="modal-content" onsubmit="sendWhatsAppTest(event)">
+            <div class="modal-header">
+                <h2 class="modal-title h6">Test WhatsApp OTP Delivery</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-light border small py-2 mb-3">
+                    Sends a multipart POST request to <code>{{ config('twsd_connect.providers.whatsapp.endpoint') }}</code> using your saved encrypted <code>appkey</code> and <code>authkey</code>.
+                </div>
+                <div id="waTestFeedback" class="alert small py-2 mb-3 d-none"></div>
+                <div class="mb-3">
+                    <label class="form-label small fw-medium">Receiver Phone Number (International Format Without +)</label>
+                    <input type="tel" id="waTestPhone" class="form-control form-control-sm font-monospace" placeholder="919876543210" required>
+                    <div class="form-text">Digits only with country code (any <code>+</code> or spaces are stripped automatically).</div>
+                </div>
+                <div class="mb-2">
+                    <label class="form-label small fw-medium">Test Message (Optional)</label>
+                    <textarea id="waTestMessage" rows="2" class="form-control form-control-sm" placeholder="TWSD Connect — Test WhatsApp OTP verification message."></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Close</button>
+                <button type="submit" id="waSendTestBtn" class="btn btn-dark btn-sm">Send Test WhatsApp</button>
+            </div>
+        </form>
+    </div>
+</div>
 @endsection
 
 @push('scripts')
@@ -364,6 +401,11 @@ const providerInstructions = {
             <li>Copy the entire <code>const firebaseConfig = { ... };</code> block and paste it below.</li>
         </ol>
         <div class="text-muted">Also enable <strong>Authentication &rarr; Sign-in method &rarr; Phone</strong> in Firebase Console and add <code>{{ request()->getHost() }}</code> to <strong>Authorized domains</strong>.</div>
+    `,
+    whatsapp_otp: `
+        <div class="fw-semibold text-dark mb-1">Default Webglit WhatsApp API</div>
+        <div class="text-muted mb-1">Endpoint: <code>{{ config('twsd_connect.providers.whatsapp.endpoint') }}</code></div>
+        <div class="text-muted">Only your <code>appkey</code> and <code>authkey</code> are needed. Receiver numbers are automatically formatted in international digits without the <code>+</code> sign.</div>
     `
 };
 
@@ -381,10 +423,8 @@ const providerSchemas = {
         }
     ],
     whatsapp_otp: [
-        { name: 'api_base_url', label: 'Webglit / WhatsApp API Base URL', type: 'url', secret: false, required: true, placeholder: 'https://api.webglit.example/v1' },
-        { name: 'sender_id', label: 'Sender / Phone Number ID', type: 'text', secret: false, required: true, placeholder: '1092837465' },
-        { name: 'template_name', label: 'Approved OTP Template Name', type: 'text', secret: false, required: true, placeholder: 'twsd_login_otp' },
-        { name: 'api_key', label: 'API Bearer Token / Secret (Encrypted)', type: 'password', secret: true, required: false, placeholder: 'Leave blank to retain existing secret' }
+        { name: 'appkey', label: 'App Key (appkey — Encrypted)', type: 'password', secret: true, required: false, placeholder: 'Leave blank to retain existing appkey' },
+        { name: 'authkey', label: 'Auth Key (authkey — Encrypted)', type: 'password', secret: true, required: false, placeholder: 'Leave blank to retain existing authkey' }
     ],
     google: [
         { name: 'client_id', label: 'Google OAuth Client ID', type: 'text', secret: false, required: true, placeholder: '12345-abc.apps.googleusercontent.com' },
@@ -850,6 +890,52 @@ async function verifyFirebaseTestSms(e) {
         setTimeout(() => window.location.reload(), 900);
     } catch (err) {
         showFbTestFeedback(err?.message || 'Verification failed.', true);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = orig;
+    }
+}
+
+function openWhatsAppTestModal() {
+    const feedback = document.getElementById('waTestFeedback');
+    feedback.classList.add('d-none');
+    feedback.textContent = '';
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('testWhatsAppModal')).show();
+}
+
+async function sendWhatsAppTest(e) {
+    e.preventDefault();
+    const feedback = document.getElementById('waTestFeedback');
+    const btn = document.getElementById('waSendTestBtn');
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Sending...';
+    feedback.classList.add('d-none');
+
+    try {
+        const res = await fetch('/super-admin/providers/whatsapp_otp/test', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'X-CSRF-TOKEN': csrfToken
+            },
+            body: JSON.stringify({
+                phone_number: document.getElementById('waTestPhone').value.trim(),
+                message: document.getElementById('waTestMessage').value.trim() || null
+            })
+        });
+        if (!res.ok) {
+            throw new Error(await parseError(res));
+        }
+        feedback.className = 'alert alert-success small py-2 mb-3';
+        feedback.textContent = 'WhatsApp message dispatched successfully! Provider marked Healthy.';
+        feedback.classList.remove('d-none');
+        setTimeout(() => window.location.reload(), 900);
+    } catch (err) {
+        feedback.className = 'alert alert-danger small py-2 mb-3';
+        feedback.textContent = err?.message || 'WhatsApp test delivery failed.';
+        feedback.classList.remove('d-none');
     } finally {
         btn.disabled = false;
         btn.textContent = orig;

@@ -14,6 +14,7 @@ use App\Models\ProviderConfiguration;
 use App\Models\SecurityEvent;
 use App\Modules\Audit\Services\AuditService;
 use App\Modules\Providers\Email\Services\EmailConfigurationService;
+use App\Modules\Providers\WhatsApp\Services\WhatsAppOtpService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
@@ -25,6 +26,7 @@ class GlobalAuthAdminController extends Controller
 {
     public function __construct(
         private readonly EmailConfigurationService $emailConfigService,
+        private readonly WhatsAppOtpService $whatsAppOtpService,
         private readonly AuditService $auditService
     ) {
     }
@@ -85,7 +87,7 @@ class GlobalAuthAdminController extends Controller
         $provider = AuthProvider::query()->where('code', $providerCode)->firstOrFail();
 
         $validated = $request->validate([
-            'public_settings' => ['required', 'array'],
+            'public_settings' => ['nullable', 'array'],
             'credentials' => ['nullable', 'array'],
             'is_active' => ['nullable', 'boolean'],
         ]);
@@ -103,12 +105,26 @@ class GlobalAuthAdminController extends Controller
             }
         }
 
+        $publicSettings = $validated['public_settings'] ?? [];
+        if ($providerCode === 'whatsapp_otp') {
+            if (empty($mergedSecrets['appkey']) || empty($mergedSecrets['authkey'])) {
+                return response()->json([
+                    'error' => 'missing_whatsapp_credentials',
+                    'message' => 'Both appkey and authkey are required for WhatsApp OTP.',
+                ], 422);
+            }
+            $publicSettings = array_merge([
+                'endpoint' => config('twsd_connect.providers.whatsapp.endpoint', 'https://api.whatsapp.webglit.com/api/create-message'),
+                'phone_format' => 'international_without_plus',
+            ], $publicSettings);
+        }
+
         $config = ProviderConfiguration::query()->updateOrCreate(
             ['scope' => 'global', 'organisation_id' => null, 'provider_code' => $providerCode],
             [
                 'is_active' => (bool) ($validated['is_active'] ?? true),
                 'use_platform_default' => true,
-                'public_settings' => $validated['public_settings'],
+                'public_settings' => $publicSettings,
                 'encrypted_credentials' => $mergedSecrets ?: null,
                 'health_status' => 'healthy',
                 'last_verified_at' => now(),
@@ -311,6 +327,68 @@ class GlobalAuthAdminController extends Controller
             return response()->json([
                 'error' => 'firebase_test_failed',
                 'message' => 'Firebase SMS verification failed: ' . trim($e->getMessage()),
+            ], 422);
+        }
+    }
+
+    public function testWhatsAppOtp(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'phone_number' => ['required', 'string', 'max:32'],
+            'message' => ['nullable', 'string', 'max:500'],
+        ]);
+
+        $config = ProviderConfiguration::query()
+            ->where('scope', 'global')
+            ->whereNull('organisation_id')
+            ->where('provider_code', 'whatsapp_otp')
+            ->first();
+
+        try {
+            $body = trim((string) ($validated['message'] ?? ''));
+            if ($body === '') {
+                $body = 'TWSD Connect — Test WhatsApp OTP verification message. Your Webglit API integration is operational.';
+            }
+
+            $result = $this->whatsAppOtpService->sendMessage($validated['phone_number'], $body);
+
+            if ($config) {
+                $config->update([
+                    'health_status' => 'healthy',
+                    'last_verified_at' => now(),
+                    'last_error_message' => null,
+                ]);
+            }
+
+            AuthProvider::query()->where('code', 'whatsapp_otp')->update([
+                'health_status' => 'healthy',
+                'last_health_check_at' => now(),
+            ]);
+
+            $this->auditService->record(
+                action: 'super_admin.whatsapp_otp_tested',
+                actor: $request->user(),
+                targetType: 'provider_configuration',
+                targetUuid: $config?->uuid,
+                afterState: ['to_masked' => $result['to_masked']],
+                request: $request,
+                actorRole: 'super_admin'
+            );
+
+            return response()->json(['data' => ['tested' => true] + $result]);
+        } catch (Throwable $e) {
+            if ($config) {
+                $config->update([
+                    'health_status' => 'degraded',
+                    'last_error_message' => mb_substr($e->getMessage(), 0, 500),
+                ]);
+            }
+
+            Log::warning('WhatsApp OTP test delivery failed', ['error' => $e->getMessage()]);
+
+            return response()->json([
+                'error' => 'whatsapp_delivery_failed',
+                'message' => 'WhatsApp delivery failed: ' . trim($e->getMessage()),
             ], 422);
         }
     }

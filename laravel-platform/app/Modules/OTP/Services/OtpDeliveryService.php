@@ -7,12 +7,15 @@ use App\Models\Organisation;
 use App\Models\OtpDeliveryLog;
 use App\Models\OtpTransaction;
 use App\Modules\Providers\Email\Services\EmailConfigurationService;
+use App\Modules\Providers\WhatsApp\Services\WhatsAppOtpService;
 use Throwable;
 
 class OtpDeliveryService
 {
-    public function __construct(private readonly EmailConfigurationService $emailConfigService)
-    {
+    public function __construct(
+        private readonly EmailConfigurationService $emailConfigService,
+        private readonly WhatsAppOtpService $whatsAppOtpService
+    ) {
     }
 
     public function deliverEmailOtp(
@@ -59,6 +62,37 @@ class OtpDeliveryService
                 'otp_transaction_id' => $transaction->id,
                 'organisation_id' => $organisation->id,
                 'provider_code' => 'email_otp',
+                'delivery_status' => 'failed',
+                'error_message' => mb_substr($e->getMessage(), 0, 500),
+            ]);
+        }
+    }
+
+    public function deliverWhatsAppOtp(
+        OtpTransaction $transaction,
+        Organisation $organisation,
+        Application $application,
+        string $recipientPhone,
+        string $plainOtp,
+        int $expiryMinutes
+    ): OtpDeliveryLog {
+        try {
+            $message = "{$plainOtp} is your verification code for {$application->name} ({$organisation->name}). It expires in {$expiryMinutes} minutes.";
+            $result = $this->whatsAppOtpService->sendMessage($recipientPhone, $message, $organisation);
+
+            return OtpDeliveryLog::create([
+                'otp_transaction_id' => $transaction->id,
+                'organisation_id' => $organisation->id,
+                'provider_code' => 'whatsapp_otp',
+                'delivery_status' => 'sent',
+                'http_status' => $result['http_status'],
+                'sanitized_response' => $result['sanitized_response'],
+            ]);
+        } catch (Throwable $e) {
+            return OtpDeliveryLog::create([
+                'otp_transaction_id' => $transaction->id,
+                'organisation_id' => $organisation->id,
+                'provider_code' => 'whatsapp_otp',
                 'delivery_status' => 'failed',
                 'error_message' => mb_substr($e->getMessage(), 0, 500),
             ]);
