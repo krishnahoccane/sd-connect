@@ -21,13 +21,18 @@ class InstallationController extends Controller
     public function index(): View
     {
         $checks = $this->checkService->inspect();
+        $configuredHost = (string) config('database.connections.mysql.host', 'localhost');
+        if ($configuredHost === '' || $configuredHost === 'mysql') {
+            $configuredHost = 'localhost';
+        }
 
         return view('installer.wizard', [
             'checks' => $checks,
             'defaults' => [
                 'app_url' => url('/'),
-                'db_host' => config('database.connections.mysql.host', '127.0.0.1'),
+                'db_host' => $configuredHost,
                 'db_port' => config('database.connections.mysql.port', 3306),
+                'db_socket' => config('database.connections.mysql.unix_socket', ''),
                 'db_database' => config('database.connections.mysql.database', 'twsd_connect'),
                 'db_username' => config('database.connections.mysql.username', 'twsd_user'),
                 'redis_host' => env('REDIS_HOST', '127.0.0.1'),
@@ -46,6 +51,7 @@ class InstallationController extends Controller
         $validated = $request->validate([
             'db_host' => ['required', 'string', 'max:255'],
             'db_port' => ['required', 'integer', 'min:1', 'max:65535'],
+            'db_socket' => ['nullable', 'string', 'max:255'],
             'db_database' => ['required', 'string', 'max:128'],
             'db_username' => ['required', 'string', 'max:128'],
             'db_password' => ['nullable', 'string', 'max:255'],
@@ -56,7 +62,8 @@ class InstallationController extends Controller
             port: (int) $validated['db_port'],
             database: $validated['db_database'],
             username: $validated['db_username'],
-            password: (string) ($validated['db_password'] ?? '')
+            password: (string) ($validated['db_password'] ?? ''),
+            socket: $validated['db_socket'] ?? null
         );
 
         return response()->json(['data' => $result], $result['connected'] ? 200 : 422);
@@ -76,6 +83,7 @@ class InstallationController extends Controller
             'app_url' => ['required', 'url', 'max:255'],
             'db_host' => ['required', 'string', 'max:255'],
             'db_port' => ['required', 'integer', 'min:1', 'max:65535'],
+            'db_socket' => ['nullable', 'string', 'max:255'],
             'db_database' => ['required', 'string', 'max:128'],
             'db_username' => ['required', 'string', 'max:128'],
             'db_password' => ['nullable', 'string', 'max:255'],

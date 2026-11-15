@@ -67,38 +67,82 @@ class InstallationExecutionService
     }
 
     /**
-     * Tests an isolated PDO connection to MySQL 8 without persisting credentials yet.
+     * Tests an isolated PDO connection to MySQL 8 or MariaDB 10.6+ (TCP or UNIX socket) without persisting credentials yet.
      *
-     * @return array{connected: bool, server_version: string|null, error: string|null}
+     * @return array{connected: bool, server_version: string|null, engine: string|null, resolved_socket: string|null, error: string|null}
      */
     public function testDatabaseConnection(
         string $host,
         int $port,
         string $database,
         string $username,
-        string $password
+        string $password,
+        ?string $socket = null
     ): array {
-        try {
-            $dsn = sprintf('mysql:host=%s;port=%d;dbname=%s;charset=utf8mb4', $host, $port, $database);
-            $pdo = new PDO($dsn, $username, $password, [
-                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-                PDO::ATTR_TIMEOUT => 5,
-            ]);
+        $socket = $socket !== null ? trim($socket) : null;
+        $candidates = [];
 
-            $version = (string) $pdo->query('SELECT VERSION()')->fetchColumn();
+        if (!empty($socket)) {
+            $candidates[] = [
+                'dsn' => sprintf('mysql:unix_socket=%s;dbname=%s;charset=utf8mb4', $socket, $database),
+                'socket' => $socket,
+            ];
+        } else {
+            $candidates[] = [
+                'dsn' => sprintf('mysql:host=%s;port=%d;dbname=%s;charset=utf8mb4', $host, $port, $database),
+                'socket' => null,
+            ];
 
-            return [
-                'connected' => true,
-                'server_version' => $version,
-                'error' => null,
-            ];
-        } catch (Throwable $e) {
-            return [
-                'connected' => false,
-                'server_version' => null,
-                'error' => 'Database connection failed: ' . $e->getMessage(),
-            ];
+            if (in_array(strtolower(trim($host)), ['localhost', '127.0.0.1'], true)) {
+                $commonSockets = array_unique(array_filter([
+                    ini_get('pdo_mysql.default_socket') ?: null,
+                    '/var/lib/mysql/mysql.sock',
+                    '/run/mysqld/mysqld.sock',
+                    '/tmp/mysql.sock',
+                ]));
+
+                foreach ($commonSockets as $candidateSocket) {
+                    if (@file_exists($candidateSocket)) {
+                        $candidates[] = [
+                            'dsn' => sprintf('mysql:unix_socket=%s;dbname=%s;charset=utf8mb4', $candidateSocket, $database),
+                            'socket' => $candidateSocket,
+                        ];
+                    }
+                }
+            }
         }
+
+        $lastError = null;
+
+        foreach ($candidates as $candidate) {
+            try {
+                $pdo = new PDO($candidate['dsn'], $username, $password, [
+                    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                    PDO::ATTR_TIMEOUT => 5,
+                ]);
+
+                $version = (string) $pdo->query('SELECT VERSION()')->fetchColumn();
+                $engine = str_contains(strtolower($version), 'mariadb') ? 'mariadb' : 'mysql';
+
+                return [
+                    'connected' => true,
+                    'server_version' => $version,
+                    'engine' => $engine,
+                    'resolved_socket' => $candidate['socket'],
+                    'error' => null,
+                ];
+            } catch (Throwable $e) {
+                $lastError = $e->getMessage();
+            }
+        }
+
+        return [
+            'connected' => false,
+            'server_version' => null,
+            'engine' => null,
+            'resolved_socket' => null,
+            'error' => 'Database connection failed: ' . ($lastError ?? 'Unable to reach MySQL/MariaDB server.'),
+        ];
     }
 
     /**
@@ -113,12 +157,16 @@ class InstallationExecutionService
             port: (int) $dbConfig['db_port'],
             database: (string) $dbConfig['db_database'],
             username: (string) $dbConfig['db_username'],
-            password: (string) ($dbConfig['db_password'] ?? '')
+            password: (string) ($dbConfig['db_password'] ?? ''),
+            socket: isset($dbConfig['db_socket']) ? (string) $dbConfig['db_socket'] : null
         );
 
         if (!$test['connected']) {
-            throw new RuntimeException($test['error'] ?? 'Unable to connect to MySQL database.');
+            throw new RuntimeException($test['error'] ?? 'Unable to connect to MySQL/MariaDB database.');
         }
+
+        $engine = $test['engine'] ?? 'mysql';
+        $resolvedSocket = (string) ($test['resolved_socket'] ?? ($dbConfig['db_socket'] ?? ''));
 
         $appKey = config('app.key');
         if (empty($appKey)) {
@@ -132,9 +180,10 @@ class InstallationExecutionService
         $this->envWriter->updateValues(base_path('.env'), [
             'APP_URL' => (string) ($dbConfig['app_url'] ?? 'https://connect.twsd.me'),
             'APP_KEY' => $appKey,
-            'DB_CONNECTION' => 'mysql',
+            'DB_CONNECTION' => $engine,
             'DB_HOST' => (string) $dbConfig['db_host'],
             'DB_PORT' => (int) $dbConfig['db_port'],
+            'DB_SOCKET' => $resolvedSocket,
             'DB_DATABASE' => (string) $dbConfig['db_database'],
             'DB_USERNAME' => (string) $dbConfig['db_username'],
             'DB_PASSWORD' => (string) ($dbConfig['db_password'] ?? ''),
@@ -149,14 +198,15 @@ class InstallationExecutionService
 
         // Refresh runtime configuration & database connection
         Config::set('app.key', $appKey);
-        Config::set('database.default', 'mysql');
-        Config::set('database.connections.mysql.host', $dbConfig['db_host']);
-        Config::set('database.connections.mysql.port', (int) $dbConfig['db_port']);
-        Config::set('database.connections.mysql.database', $dbConfig['db_database']);
-        Config::set('database.connections.mysql.username', $dbConfig['db_username']);
-        Config::set('database.connections.mysql.password', $dbConfig['db_password'] ?? '');
-        DB::purge('mysql');
-        DB::reconnect('mysql');
+        Config::set('database.default', $engine);
+        Config::set("database.connections.{$engine}.host", $dbConfig['db_host']);
+        Config::set("database.connections.{$engine}.port", (int) $dbConfig['db_port']);
+        Config::set("database.connections.{$engine}.unix_socket", $resolvedSocket);
+        Config::set("database.connections.{$engine}.database", $dbConfig['db_database']);
+        Config::set("database.connections.{$engine}.username", $dbConfig['db_username']);
+        Config::set("database.connections.{$engine}.password", $dbConfig['db_password'] ?? '');
+        DB::purge($engine);
+        DB::reconnect($engine);
 
         Artisan::call('migrate', ['--force' => true]);
 
@@ -174,6 +224,7 @@ class InstallationExecutionService
         return [
             'migrated' => true,
             'mysql_version' => $test['server_version'],
+            'engine' => $engine,
             'redis_active' => $redisAvailable,
         ];
     }

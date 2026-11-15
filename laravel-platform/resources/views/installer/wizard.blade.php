@@ -242,11 +242,12 @@
                     </div>
 
                     <div class="col-md-8">
-                        <label for="db_host" class="form-label small fw-semibold">MySQL Host</label>
+                        <label for="db_host" class="form-label small fw-semibold">MySQL / MariaDB Host</label>
                         <input type="text" class="form-control mono" id="db_host" name="db_host" value="{{ $defaults['db_host'] }}" required>
+                        <div class="form-text" style="font-size: 0.75rem;">Use <code class="mono">localhost</code> on cPanel (UNIX socket) or <code class="mono">127.0.0.1</code> / remote IP for TCP.</div>
                     </div>
                     <div class="col-md-4">
-                        <label for="db_port" class="form-label small fw-semibold">MySQL Port</label>
+                        <label for="db_port" class="form-label small fw-semibold">Port</label>
                         <input type="number" class="form-control mono" id="db_port" name="db_port" value="{{ $defaults['db_port'] }}" min="1" max="65535" required>
                     </div>
 
@@ -259,12 +260,16 @@
                         <input type="text" class="form-control mono" id="db_username" name="db_username" value="{{ $defaults['db_username'] }}" required>
                     </div>
 
-                    <div class="col-12">
+                    <div class="col-md-7">
                         <label for="db_password" class="form-label small fw-semibold">Database Password</label>
                         <div class="input-group">
                             <input type="password" class="form-control mono" id="db_password" name="db_password" autocomplete="new-password" placeholder="Leave blank if using passwordless local socket/user">
                             <button class="btn btn-outline-secondary" type="button" data-toggle-password="db_password">Show</button>
                         </div>
+                    </div>
+                    <div class="col-md-5">
+                        <label for="db_socket" class="form-label small fw-semibold">UNIX Socket <span class="text-secondary fw-normal">(optional)</span></label>
+                        <input type="text" class="form-control mono" id="db_socket" name="db_socket" value="{{ $defaults['db_socket'] ?? '' }}" placeholder="Auto-detected (e.g. /var/lib/mysql/mysql.sock)">
                     </div>
 
                     <div class="col-12">
@@ -520,6 +525,7 @@
         app_url: document.getElementById('app_url').value.trim(),
         db_host: document.getElementById('db_host').value.trim(),
         db_port: Number(document.getElementById('db_port').value),
+        db_socket: document.getElementById('db_socket').value.trim() || null,
         db_database: document.getElementById('db_database').value.trim(),
         db_username: document.getElementById('db_username').value.trim(),
         db_password: document.getElementById('db_password').value,
@@ -532,13 +538,15 @@
         clearAlert();
         const box = document.getElementById('dbTestStatus');
         box.className = 'alert alert-info small mt-3 mb-0';
-        box.textContent = 'Testing MySQL PDO connection...';
+        box.textContent = 'Testing MySQL / MariaDB PDO connection...';
         box.classList.remove('d-none');
 
         try {
             const payload = await apiRequest('/install/database/test', 'POST', getDbPayload());
             box.className = 'alert alert-success small mt-3 mb-0';
-            box.textContent = `Connection verified. MySQL Server Version: ${payload.data.server_version}`;
+            const engineLabel = payload.data.engine === 'mariadb' ? 'MariaDB' : 'MySQL';
+            const socketNote = payload.data.resolved_socket ? ` via UNIX socket (${payload.data.resolved_socket})` : '';
+            box.textContent = `Connection verified (${engineLabel} ${payload.data.server_version}${socketNote}).`;
         } catch (err) {
             box.className = 'alert alert-danger small mt-3 mb-0';
             box.textContent = err.message;
@@ -555,7 +563,8 @@
             const payload = await apiRequest('/install/database/migrate', 'POST', getDbPayload());
             const box = document.getElementById('dbTestStatus');
             box.className = 'alert alert-success small mt-3 mb-0';
-            box.textContent = `Migrated & seeded successfully (MySQL ${payload.data.mysql_version}).`;
+            const engineLabel = payload.data.engine === 'mariadb' ? 'MariaDB' : 'MySQL';
+            box.textContent = `Migrated & seeded successfully (${engineLabel} ${payload.data.mysql_version}).`;
             box.classList.remove('d-none');
             goToStep(3);
         } catch (err) {
