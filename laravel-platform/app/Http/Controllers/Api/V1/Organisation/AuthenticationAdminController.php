@@ -12,6 +12,8 @@ use App\Modules\Audit\Services\AuditService;
 use App\Modules\Providers\Email\Services\EmailConfigurationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
+use Throwable;
 
 class AuthenticationAdminController extends Controller
 {
@@ -148,10 +150,31 @@ class AuthenticationAdminController extends Controller
         $config = EmailConfiguration::query()
             ->where('scope', 'organisation')
             ->where('organisation_id', $organisation->id)
-            ->firstOrFail();
+            ->first();
 
-        $result = $this->emailConfigService->testConfiguration($config, $validated['recipient_email']);
-        return response()->json(['data' => $result]);
+        if (!$config) {
+            return response()->json([
+                'error' => 'email_config_missing',
+                'message' => 'Save the Organisation Email Sender configuration first before sending a test email.',
+            ], 422);
+        }
+
+        try {
+            $result = $this->emailConfigService->testConfiguration($config, $validated['recipient_email']);
+            return response()->json(['data' => $result]);
+        } catch (Throwable $e) {
+            Log::warning('Organisation email delivery test failed', [
+                'organisation_id' => $organisation->id,
+                'sender_email' => $config->sender_email,
+                'driver' => $config->driver,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'error' => 'email_delivery_failed',
+                'message' => 'Email delivery failed: ' . trim($e->getMessage()),
+            ], 422);
+        }
     }
 
     public function loginLogs(Request $request): JsonResponse

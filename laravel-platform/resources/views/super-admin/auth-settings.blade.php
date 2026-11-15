@@ -477,22 +477,38 @@ async function savePlatformEmail(e) {
 
 async function testPlatformEmail(e) {
     e.preventDefault();
-    const form = new FormData(e.target);
-    const res = await fetch('/super-admin/providers/email/platform-default/test', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'X-CSRF-TOKEN': csrfToken
-        },
-        body: JSON.stringify({ recipient_email: form.get('recipient_email') })
-    });
-    if (res.ok) {
-        showFeedback('Test email sent successfully! Platform email_otp sender is now marked Verified.');
-        setTimeout(() => window.location.reload(), 900);
-        return;
+    const formEl = e.target;
+    const btn = formEl.querySelector('button[type="submit"]');
+    const originalText = btn ? btn.textContent : 'Send Test';
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Sending...';
     }
-    showFeedback(await parseError(res), true);
+    try {
+        const form = new FormData(formEl);
+        const res = await fetch('/super-admin/providers/email/platform-default/test', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'X-CSRF-TOKEN': csrfToken
+            },
+            body: JSON.stringify({ recipient_email: form.get('recipient_email') })
+        });
+        if (res.ok) {
+            showFeedback('Test email sent successfully! Platform email_otp sender is now marked Verified.');
+            setTimeout(() => window.location.reload(), 900);
+            return;
+        }
+        showFeedback(await parseError(res), true);
+    } catch (err) {
+        showFeedback(`Network or server error: ${err?.message || 'Unable to reach mail endpoint'}`, true);
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = originalText;
+        }
+    }
 }
 
 async function createOrganisation(e) {

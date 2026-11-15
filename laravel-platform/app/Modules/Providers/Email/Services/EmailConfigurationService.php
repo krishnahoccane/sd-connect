@@ -194,32 +194,51 @@ class EmailConfigurationService
         $secrets = $config->encrypted_transport_secrets ?? [];
         $smtp = $config->smtp_settings ?? [];
 
+        $port = (int) (!empty($smtp['port']) ? $smtp['port'] : 587);
+        $encryption = (string) (!empty($smtp['encryption']) ? $smtp['encryption'] : 'tls');
+        $scheme = ($encryption === 'ssl' || $port === 465) ? 'smtps' : 'smtp';
+
         if ($config->driver === 'org_smtp') {
+            $host = trim((string) ($smtp['host'] ?? ''));
+            if ($host === '') {
+                throw new InvalidArgumentException('SMTP Host is required when using Organisation Custom SMTP.');
+            }
+            $username = trim((string) ($smtp['username'] ?? ''));
+            $password = (string) ($secrets['password'] ?? ($secrets['app_password'] ?? ''));
+        } else {
+            // Google Workspace / Custom Platform SMTP Relay configuration
+            $host = trim((string) (!empty($smtp['host']) ? $smtp['host'] : 'smtp.gmail.com'));
+            $username = trim((string) (!empty($smtp['username']) ? $smtp['username'] : $config->sender_email));
+            $password = (string) ($secrets['app_password'] ?? ($secrets['password'] ?? ($secrets['access_token'] ?? '')));
+        }
+
+        if (strtolower($host) === 'sendmail') {
             config([
                 "mail.mailers.{$mailerName}" => [
-                    'transport' => 'smtp',
-                    'host' => $smtp['host'] ?? '',
-                    'port' => (int) ($smtp['port'] ?? 587),
-                    'encryption' => $smtp['encryption'] ?? 'tls',
-                    'username' => $smtp['username'] ?? '',
-                    'password' => $secrets['password'] ?? '',
-                    'timeout' => 10,
+                    'transport' => 'sendmail',
+                    'path' => config('mail.mailers.sendmail.path', '/usr/sbin/sendmail -bs -i'),
                 ],
             ]);
         } else {
-            // Google Workspace / Custom Platform SMTP Relay configuration
+            if ($host === 'smtp.gmail.com' && $password === '') {
+                throw new InvalidArgumentException('Google Workspace / Gmail App Password is required. Enter your App Password, click Save, and retry Send Test.');
+            }
+
             config([
                 "mail.mailers.{$mailerName}" => [
                     'transport' => 'smtp',
-                    'host' => $smtp['host'] ?? 'smtp.gmail.com',
-                    'port' => (int) ($smtp['port'] ?? 587),
-                    'encryption' => $smtp['encryption'] ?? 'tls',
-                    'username' => !empty($smtp['username']) ? $smtp['username'] : $config->sender_email,
-                    'password' => $secrets['app_password'] ?? ($secrets['password'] ?? ($secrets['access_token'] ?? '')),
-                    'timeout' => 10,
+                    'scheme' => $scheme,
+                    'host' => $host,
+                    'port' => $port,
+                    'auto_tls' => $encryption !== 'none',
+                    'username' => $username !== '' ? $username : null,
+                    'password' => $password !== '' ? $password : null,
+                    'timeout' => 12,
                 ],
             ]);
         }
+
+        Mail::purge($mailerName);
 
         Mail::mailer($mailerName)->raw($body, function ($message) use ($config, $toEmail, $subject): void {
             $message->from($config->sender_email, $config->sender_name)

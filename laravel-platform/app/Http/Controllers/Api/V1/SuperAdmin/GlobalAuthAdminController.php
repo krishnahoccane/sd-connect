@@ -16,7 +16,9 @@ use App\Modules\Audit\Services\AuditService;
 use App\Modules\Providers\Email\Services\EmailConfigurationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Throwable;
 
 class GlobalAuthAdminController extends Controller
 {
@@ -192,10 +194,31 @@ class GlobalAuthAdminController extends Controller
     public function testPlatformEmail(Request $request): JsonResponse
     {
         $validated = $request->validate(['recipient_email' => ['required', 'email']]);
-        $config = EmailConfiguration::query()->where('scope', 'global')->whereNull('organisation_id')->firstOrFail();
-        $result = $this->emailConfigService->testConfiguration($config, $validated['recipient_email']);
+        $config = EmailConfiguration::query()->where('scope', 'global')->whereNull('organisation_id')->first();
 
-        return response()->json(['data' => $result]);
+        if (!$config) {
+            return response()->json([
+                'error' => 'email_config_missing',
+                'message' => 'Save the Platform Default Email Sender configuration first before sending a test email.',
+            ], 422);
+        }
+
+        try {
+            $result = $this->emailConfigService->testConfiguration($config, $validated['recipient_email']);
+
+            return response()->json(['data' => $result]);
+        } catch (Throwable $e) {
+            Log::warning('Platform email delivery test failed', [
+                'sender_email' => $config->sender_email,
+                'driver' => $config->driver,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'error' => 'email_delivery_failed',
+                'message' => 'Email delivery failed: ' . trim($e->getMessage()),
+            ], 422);
+        }
     }
 
     public function securityEvents(): JsonResponse
