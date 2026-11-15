@@ -8,7 +8,7 @@
     "php": "^8.3",
     "firebase/php-jwt": "^6.10 || ^7.0",
     "google/apiclient": "^2.18",
-    "kreait/laravel-firebase": "^5.10",
+    "kreait/laravel-firebase": "^6.0",
     "laravel/framework": "^12.0",
     "laravel/passport": "^13.0",
     "laravel/tinker": "^2.10",
