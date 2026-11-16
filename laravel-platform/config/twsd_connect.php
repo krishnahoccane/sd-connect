@@ -39,7 +39,7 @@ return [
             'endpoint' => env('WHATSAPP_API_URL', 'https://api.whatsapp.webglit.com/api/create-message'),
             'appkey' => env('WHATSAPP_APPKEY', env('WHATSAPP_APP_KEY')),
             'authkey' => env('WHATSAPP_AUTHKEY', env('WHATSAPP_AUTH_KEY')),
-            'timeout_seconds' => 10,
+            'timeout_seconds' => (int) env('WHATSAPP_TIMEOUT_SECONDS', 30),
         ],
     ],
 ];

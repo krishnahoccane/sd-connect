@@ -4,7 +4,9 @@ namespace App\Modules\Providers\WhatsApp\Services;
 
 use App\Models\Organisation;
 use App\Models\ProviderConfiguration;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
 use RuntimeException;
 
@@ -84,22 +86,51 @@ class WhatsAppOtpService
     /**
      * Dispatches a WhatsApp message via Webglit multipart form-data API.
      *
-     * @return array{to_masked: string, http_status: int, sanitized_response: array<string, mixed>}
+     * @return array{to_masked: string, http_status: int, timed_out_waiting_ack?: bool, sanitized_response: array<string, mixed>}
      */
     public function sendMessage(string $phoneNumber, string $message, ?Organisation $organisation = null): array
     {
         $creds = $this->resolveCredentials($organisation);
         $toDigits = $this->normalizePhoneDigits($phoneNumber);
-        $timeout = (int) config('twsd_connect.providers.whatsapp.timeout_seconds', 10);
+        $timeout = max(15, (int) config('twsd_connect.providers.whatsapp.timeout_seconds', 30));
+        $masked = substr($toDigits, 0, 2) . str_repeat('*', max(2, strlen($toDigits) - 4)) . substr($toDigits, -2);
 
-        $response = Http::asMultipart()
-            ->timeout($timeout)
-            ->post($creds['endpoint'], [
-                'appkey' => $creds['appkey'],
-                'authkey' => $creds['authkey'],
-                'to' => $toDigits,
-                'message' => $message,
-            ]);
+        try {
+            $response = Http::asMultipart()
+                ->connectTimeout(10)
+                ->timeout($timeout)
+                ->post($creds['endpoint'], [
+                    'appkey' => $creds['appkey'],
+                    'authkey' => $creds['authkey'],
+                    'to' => $toDigits,
+                    'message' => $message,
+                ]);
+        } catch (ConnectionException $e) {
+            $errMsg = $e->getMessage();
+            // Webglit may dispatch the WhatsApp message immediately after TCP connect + POST upload
+            // while delaying its HTTP response beyond the read timeout (cURL error 28: Operation timed out).
+            $isPostConnectReadTimeout = str_contains($errMsg, 'cURL error 28')
+                && str_contains($errMsg, 'Operation timed out')
+                && !str_contains($errMsg, 'Connection timed out')
+                && !str_contains($errMsg, 'Failed to connect')
+                && !str_contains($errMsg, 'Resolving timed out');
+
+            if ($isPostConnectReadTimeout) {
+                Log::warning('WhatsApp API read timeout after POST upload; proceeding with OTP challenge', [
+                    'to_masked' => $masked,
+                    'timeout_seconds' => $timeout,
+                ]);
+
+                return [
+                    'to_masked' => $masked,
+                    'http_status' => 202,
+                    'timed_out_waiting_ack' => true,
+                    'sanitized_response' => ['status' => 'dispatched_ack_timeout'],
+                ];
+            }
+
+            throw new RuntimeException('WhatsApp API connection failed: ' . $errMsg, 0, $e);
+        }
 
         $bodyJson = $response->json();
         $isLogicalError = is_array($bodyJson) && (
@@ -115,8 +146,6 @@ class WhatsAppOtpService
 
             throw new RuntimeException('WhatsApp API error: ' . mb_substr(trim($detail) ?: ('HTTP ' . $response->status()), 0, 300));
         }
-
-        $masked = substr($toDigits, 0, 2) . str_repeat('*', max(2, strlen($toDigits) - 4)) . substr($toDigits, -2);
 
         return [
             'to_masked' => $masked,
